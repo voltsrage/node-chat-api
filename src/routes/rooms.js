@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {authenticate} from '../middleware/authenticate.js';
 import * as roomController from '../controllers/roomController.js';
+import * as messageController from '../controllers/messageController.js'
 
 export const roomsRouter = Router();
 roomsRouter.use(authenticate);
@@ -98,3 +99,31 @@ roomsRouter.post('/:id/leave', roomController.leaveRoom);
  *       '404': { description: Room not found }
  */
 roomsRouter.get('/:id/members', roomController.listMembers);
+
+/**
+ * @openapi
+ * /rooms/{id}/messages:
+ *   get:
+ *     summary: Paginated message history (cursor-based)
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id,     in: path,  required: true, schema: { type: string } }
+ *       - name: before
+ *         in: query
+ *         description: ISO 8601 timestamp — return messages older than this point
+ *         schema: { type: string, format: date-time }
+ *       - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+ *     responses:
+ *       '200':
+ *         description: Message page
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 items:      { type: array }
+ *                 nextCursor: { type: string, nullable: true }
+ *                 hasMore:    { type: boolean }
+ *       '404': { description: Room not found }
+ */
+roomsRouter.get('/:id/messages', messageController.getMessageHistory)
