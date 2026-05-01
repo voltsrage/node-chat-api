@@ -1,6 +1,6 @@
 import {Message} from '../models/Message.js';
 import { Room } from '../models/Room.js';
-import { NotFoundError, ValidationError } from '../errors/AppError';
+import { NotFoundError, ValidationError } from '../errors/AppError.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;

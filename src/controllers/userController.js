@@ -1,5 +1,5 @@
 import * as userService from '../services/userService.js';
-import { ApiResponse } from '../utils/ApiResponse';
+import { ApiResponse } from '../utils/ApiResponse.js';
 
 export async function getMe(req, res){
     const user = await userService.getMyProfile(req.user.sub);
