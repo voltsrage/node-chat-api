@@ -1,7 +1,8 @@
 import { Router } from "express";
 import {authenticate} from '../middleware/authenticate.js';
 import * as roomController from '../controllers/roomController.js';
-import * as messageController from '../controllers/messageController.js'
+import * as messageController from '../controllers/messageController.js';
+import * as presenceController from '../controllers/presenceController.js';
 
 export const roomsRouter = Router();
 roomsRouter.use(authenticate);
@@ -127,3 +128,24 @@ roomsRouter.get('/:id/members', roomController.listMembers);
  *       '404': { description: Room not found }
  */
 roomsRouter.get('/:id/messages', messageController.getMessageHistory)
+
+/**
+ * @openapi
+ * /rooms/{id}/presence:
+ *   get:
+ *     summary: List users currently online in the room
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string } }
+ *     responses:
+ *       '200':
+ *         description: Active users in the room
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 users: { type: array }
+ *                 count: { type: integer }
+ */
+roomsRouter.get('/:id/presence', presenceController.getRoomPresence);

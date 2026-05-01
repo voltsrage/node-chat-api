@@ -4,6 +4,7 @@ import {Room} from '../models/Room.js'
 import {socketAuthenticate} from '../middleware/socketAuthenticate.js'
 import { registerMessageHandlers } from './messageHandlers.js';
 import { registerTypingHandlers } from './typingHandlers.js';
+import { markOnline, markOffline, joinPresence } from '../services/presenceService.js';
 import { logger } from '../utils/logger.js';
 
 // userId -> Set<socketId> - tracks active connections per user
@@ -34,10 +35,16 @@ export function createSocketServer(httpServer){
         if(!userSockets.has(userId)) userSockets.set(userId, new Set());
         userSockets.get(userId).add(socket.id);
 
-        // Auto-join Socket.io room channels for all rooms the user is a member of
+        // Mark online and auto-join all room channels
         try{
+            await markOnline(userId);
+
             const rooms = await Room.find({memberIds: userId}).select('_id').lean();
-            for (const room in rooms) socket.join(room._id.toString());
+            for (const room in rooms){
+                const roomId = room._id.toString();
+                socket.join(roomId);
+                await joinPresence(userId, roomId);
+            } 
         }catch (err) {
             logger.error({ err, userId }, 'Failed to auto-join rooms on connect');
         }
@@ -46,7 +53,7 @@ export function createSocketServer(httpServer){
         registerMessageHandlers(io, socket);
         registerTypingHandlers(io, socket);
 
-        socket.on('disconnect', (reason) => {
+        socket.on('disconnect', async (reason) => {
             logger.info({ userId, socketId: socket.id, reason }, 'Socket disconnected');
 
             const sockets = userSockets.get(userId);
@@ -55,7 +62,18 @@ export function createSocketServer(httpServer){
                 if(sockets.size == 0) userSockets.delete(userId);
             }
 
-            // TODO Phase 7: remove user from presence sorted sets
+            // Only clean presence when this was the user's LAST socket
+            // (multi-tab: if another tab is still open, they remain online)
+            if(!userSockets.has(userId)){
+                // socket.rooms contains all Socket.io channels this socket was in
+                const roomIds = [...socket.rooms].filter(r => r !== socket.id);
+                try {
+                    await markOffline(userId, roomIds);
+                }
+                catch(err){
+                    logger.error({ err, userId }, 'Error during socket disconnect cleanup');
+                }
+            }
         });
     });   
 
