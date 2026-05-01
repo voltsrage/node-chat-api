@@ -5,6 +5,8 @@ import {socketAuthenticate} from '../middleware/socketAuthenticate.js'
 import { registerMessageHandlers } from './messageHandlers.js';
 import { registerTypingHandlers } from './typingHandlers.js';
 import { markOnline, markOffline, joinPresence } from '../services/presenceService.js';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { pubClient, subClient } from './adapter.js';
 import { logger } from '../utils/logger.js';
 
 // userId -> Set<socketId> - tracks active connections per user
@@ -24,6 +26,10 @@ export function createSocketServer(httpServer){
     const io = new Server(httpServer, {
         cors: {origin: '*'}, // Tighten to specific origins in production
     });
+
+    // Must be set before io.use() and io.on('connection') — adapter needs
+    // to be in place before any socket events flow through it
+    io.adapter(createAdapter(pubClient, subClient));
 
     io.use(socketAuthenticate);
 

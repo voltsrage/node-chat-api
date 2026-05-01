@@ -384,6 +384,17 @@ Pino is used over Winston because it is significantly faster (lower overhead per
 | 11 | Docker Compose + Nginx + GCP VM deployment | Container networking, sticky sessions, Socket.io upgrade |
 | 12 | GitLab CI/CD pipeline | lint → test → build → deploy |
 | 13 | Git hygiene | Merge requests, linear history |
+| 14 | Email verification | Redis token storage, email delivery, account activation gate |
+| 15 | Password reset + account lockout | Time-limited reset tokens, failed-attempt counters, Redis TTL |
+| 16 | Async job queue (BullMQ) | Job queues, worker processes, retry strategies, dead-letter queues |
+| 17 | Message reactions | Subdocument maps, atomic `$set`/`$pull`, Socket.io broadcast |
+| 18 | Unread message counts | Redis INCR per user per room, reset on read |
+| 19 | Private rooms + invitations | Role-gated access, invite tokens in Redis, 403 enforcement |
+| 20 | Direct messages | Find-or-create pattern, idempotent DM room creation |
+| 21 | Room roles / RBAC | Multi-role membership schema, permission middleware, migration |
+| 22 | Full-text message search | MongoDB text index, `$text` operator, relevance scoring |
+| 23 | Read receipts | Redis STRING per user per room, updated on history fetch |
+| 24 | Prometheus metrics | `prom-client`, four golden signals, Grafana scrape config |
 
 ---
 
@@ -564,6 +575,156 @@ WebSocket connections require a protocol upgrade from HTTP/1.1. A proxy that doe
 
 **What to do:**
 Same process as the Fleet Telemetry API. One branch per feature, descriptive merge request descriptions, rebase before merge. The only addition: because Socket.io events are not part of the OpenAPI spec, document them in a separate `SOCKET_EVENTS.md` file at the repository root.
+
+---
+
+### Phase 14 — Email Verification
+
+**What to do:**
+1. Add a `verified` boolean field (default `false`) and `verificationToken` field to the User schema.
+2. On registration, generate a cryptographically random token (`crypto.randomBytes(32).toString('hex')`), store it in Redis with a 24-hour TTL under key `email-verify:{token}` → `userId`, and send a verification email containing a link with the token.
+3. Build `GET /api/v1/auth/verify-email?token=<token>`: look up the token in Redis, set `verified: true` on the user, delete the Redis key.
+4. Gate protected actions (sending messages, creating rooms) behind a `requireVerified` middleware that checks `req.user.verified` and returns `403 UNVERIFIED` if not set.
+5. Add `POST /api/v1/auth/resend-verification`: rate-limit this endpoint (max 3 per hour per user) to prevent abuse.
+
+**Why:**
+Email verification is the first line of defence against throwaway accounts. The Redis-backed token pattern — rather than storing the token in MongoDB — is worth understanding: it gives you automatic expiry, atomic lookup-and-delete, and no need for a cron job to clean up expired tokens. The `requireVerified` middleware is a good exercise in layering authorization checks without duplicating them.
+
+---
+
+### Phase 15 — Password Reset and Account Lockout
+
+**What to do:**
+1. Build `POST /api/v1/auth/forgot-password`: generate a reset token, store it in Redis under `pwd-reset:{token}` → `userId` with a 1-hour TTL, and send a reset email.
+2. Build `POST /api/v1/auth/reset-password`: validate the token, hash the new password, update the user, delete the Redis token, and invalidate all existing refresh tokens for that user.
+3. Implement account lockout: maintain a Redis counter `login-attempts:{userId}` incremented on each failed login. After 5 failures, set a `login-locked:{userId}` key with a 15-minute TTL. On the next login attempt, check the lock key first and return `423 LOCKED` if present.
+4. Reset the attempt counter on successful login.
+
+**Why:**
+Password reset is one of the most exploited flows in web applications. The one-hour token TTL, single-use enforcement (delete on use), and post-reset refresh token invalidation are all security requirements, not nice-to-haves. Account lockout adds brute-force protection. Both patterns appear in almost every backend role interview.
+
+---
+
+### Phase 16 — Async Job Queue (BullMQ)
+
+**What to do:**
+1. Install `bullmq` and `ioredis`. Create a `src/queues/emailQueue.js` that exports a `Queue` instance named `emailQueue`.
+2. Move all email sending out of the request path — instead of `await sendEmail(...)` in the controller, do `await emailQueue.add('send-verification', { to, token })`.
+3. Create `src/workers/emailWorker.js`: a `Worker` that processes `emailQueue` jobs. The worker calls the actual email send (Nodemailer or SendGrid). Configure `attempts: 3` and exponential backoff (`backoff: { type: 'exponential', delay: 5000 }`).
+4. Run the worker as a separate process (`node src/workers/emailWorker.js`). Add it to `docker-compose.yml` as a `worker` service.
+5. Test failure handling: configure a bad SMTP credential, send a registration email, and observe the job retry in the BullMQ dashboard.
+
+**Why:**
+Sending email synchronously in a request handler ties the response time to the email provider's latency. A slow or temporarily unavailable SMTP server will make your `/register` endpoint time out. Moving it to a queue decouples the request from the side effect, enables retries without user-facing error, and is the standard architecture for any action that involves external I/O. The worker-as-separate-process pattern is also important for scaling: email throughput can be increased by adding worker replicas without touching the API.
+
+---
+
+### Phase 17 — Message Reactions
+
+**What to do:**
+1. Add a `reactions` field to the Message schema: `Map` of emoji → array of userIds (`{ type: Map, of: [String] }`).
+2. Build the `message:react` Socket.io event: use `$set` to add a userId to `reactions.{emoji}` using MongoDB's positional operator, and `$pull` to remove if the user has already reacted (toggle behaviour).
+3. Broadcast `message:reaction` to the room with the updated `reactions` map after each toggle.
+4. Return the `reactions` map in the message history endpoint so the initial page load shows existing reactions.
+5. Index consideration: reactions are embedded, not referenced — no additional indexes needed. Explain why embedding is the right choice here.
+
+**Why:**
+Reactions are a case study in the embed-vs-reference decision. Because reactions are always read with the message and bounded in number (you wouldn't store 10,000 users in a reactions array), embedding is correct. The toggle-with-`$pull`/`$set` pattern is a common atomic-update interview question. Broadcasting the full updated map (rather than a diff) keeps client state simple.
+
+---
+
+### Phase 18 — Unread Message Counts
+
+**What to do:**
+1. On every `message:new` event, increment the unread counter for all room members except the sender: `INCR unread:{userId}:{roomId}`.
+2. When a user fetches message history (`GET /rooms/:id/messages`), reset their counter: `DEL unread:{userId}:{roomId}`.
+3. Add `GET /api/v1/users/me/unread` that pipelines `GET unread:{userId}:{roomId}` for all rooms the user is a member of and returns a map of `{ roomId: count }`.
+4. Return the unread map in the connection handshake response so the UI can render badges immediately on login without a separate request.
+
+**Why:**
+Unread counts are a classic fan-out problem: one message triggers writes to N users. Redis INCR is the right tool because it is atomic (no race conditions from concurrent messages), fast (in-memory), and TTL-friendly (the key auto-cleans if the user never reads). The pipeline in step 3 avoids N serial round-trips to Redis — batch the reads.
+
+---
+
+### Phase 19 — Private Rooms and Invitations
+
+**What to do:**
+1. Add an `isPrivate` boolean field to the Room schema (default `false`).
+2. Update the `GET /rooms` list to exclude private rooms unless the requesting user is a member.
+3. Build `POST /api/v1/rooms/:id/invite`: generates an invite token stored in Redis under `invite:{token}` → `{ roomId, createdBy }` with a 48-hour TTL. Return the token (or a full invite URL) to the caller.
+4. Build `POST /api/v1/rooms/join-invite?token=<token>`: look up the token, add the user to the room, delete the token (single-use).
+5. Add a `requireMember` middleware used on all room-specific endpoints for private rooms: return `403 FORBIDDEN` if the user is not in `memberIds`.
+
+**Why:**
+Private rooms require layering two access control checks: the list endpoint must filter, and every per-room endpoint must gate. A common mistake is to protect the list but forget a direct `GET /rooms/:id` call. The invite token pattern — short-lived, single-use, Redis-backed — is identical to the email verification token pattern, reinforcing the same mental model.
+
+---
+
+### Phase 20 — Direct Messages
+
+**What to do:**
+1. Add a `type` field to the Room schema: `enum: ['group', 'dm']`, defaulting to `'group'`.
+2. Build `POST /api/v1/dm`: takes a `targetUserId`. Find or create a DM room between the authenticated user and the target. The find-or-create must be idempotent: use a deterministic key — sort the two userIds alphabetically, join them, and query `Room.findOne({ type: 'dm', dmKey: sortedKey })`.
+3. If no DM room exists, create one with `type: 'dm'`, `isPrivate: true`, and `dmKey` set to the sorted key. The creator is not a "room creator" in the usual sense — both users are equal members.
+4. Reuse all existing message history and real-time Socket.io infrastructure — DMs are just private rooms with two members.
+
+**Why:**
+The find-or-create pattern appears in many system design scenarios: idempotent resource creation where the "natural key" is a combination of fields. The sorted userId key ensures `dm(alice, bob)` and `dm(bob, alice)` produce the same room — this is the kind of subtle correctness requirement that interviewers probe. Reusing the existing message infrastructure (rather than building a parallel DM stack) is the correct design choice.
+
+---
+
+### Phase 21 — Room Roles and RBAC
+
+**What to do:**
+1. Migrate the `memberIds: [String]` field to `members: [{ userId, role, joinedAt }]` with roles `owner`, `admin`, `member`. The room creator gets `owner`. Existing members (if any) become `member`.
+2. Build a `requireRoomRole(minRole)` middleware that checks the requesting user's role in the room and returns `403` if insufficient.
+3. Gate destructive actions: deleting a room requires `owner`; kicking a member requires `admin` or `owner`; renaming a room requires `admin` or `owner`.
+4. Build `PUT /api/v1/rooms/:id/members/:userId/role`: allows an `owner` to promote/demote members.
+5. Handle the ownership transfer edge case: if the `owner` leaves the room, promote the longest-tenured `admin` (or `member`) to `owner`. If no members remain, delete the room.
+
+**Why:**
+RBAC is one of the most common system design requirements. The migration from a flat array to a structured subdocument is a real schema migration scenario. The ownership transfer edge case is exactly the kind of question interviewers ask — it probes whether you have thought through the full lifecycle of a resource, not just the happy path.
+
+---
+
+### Phase 22 — Full-Text Message Search
+
+**What to do:**
+1. Add a MongoDB text index on `Message.content`: `messageSchema.index({ content: 'text' })`.
+2. Build `GET /api/v1/rooms/:id/messages/search?q=<query>`: use `Message.find({ roomId, $text: { $search: query } }, { score: { $meta: 'textScore' } }).sort({ score: { $meta: 'textScore' } })`.
+3. Run `.explain("executionStats")` on the search query. Confirm `winningPlan` uses the text index, not a collection scan.
+4. Paginate results using limit/skip (offset pagination is acceptable here — search results are static snapshots, not real-time feeds).
+5. Understand the limitations: MongoDB text search does not support partial-word matches (no prefix matching). If prefix search is needed, the alternative is a full-text search engine like Elasticsearch.
+
+**Why:**
+MongoDB's built-in text search is sufficient for many use cases and requires no additional infrastructure. The `.explain()` check is essential — without it, the query could silently fall back to a collection scan on large collections. Understanding the partial-word limitation is important for setting expectations in a system design discussion.
+
+---
+
+### Phase 23 — Read Receipts
+
+**What to do:**
+1. When a user fetches message history, record their read position: `SET lastread:{userId}:{roomId} {newestMessageTimestamp}`.
+2. Build `GET /api/v1/rooms/:id/receipts`: for each member, return `{ userId, lastReadAt }` by pipelining `GET lastread:{userId}:{roomId}` for all members.
+3. Add a `read:update` Socket.io event so clients can report their read position in real time without making an HTTP request.
+4. Emit a `read:receipt` broadcast to the room when a user's read position updates, so other clients can render the "seen by" indicator immediately.
+
+**Why:**
+Read receipts combine REST (initial load) and WebSocket (real-time updates) in the same feature, which is a good exercise in knowing when to use each. The Redis STRING is the right data structure: one key per user per room, overwritten on each read. Storing this in MongoDB would generate a write on every page scroll — Redis absorbs that write load without durability overhead.
+
+---
+
+### Phase 24 — Prometheus Metrics
+
+**What to do:**
+1. Install `prom-client`. Initialize the default metrics collector (`collectDefaultMetrics()`), which automatically tracks Node.js process metrics (CPU, memory, event loop lag).
+2. Add a custom `http_requests_total` Counter with labels `method`, `route`, and `status_code`. Increment it in an Express middleware that runs after the route handler.
+3. Add a custom `http_request_duration_seconds` Histogram. Record the duration of each request using `process.hrtime()`.
+4. Add a `socket_connections_active` Gauge. Increment on `connection`, decrement on `disconnect`.
+5. Expose `GET /metrics` — this endpoint returns the Prometheus text format. Add a Prometheus scrape config pointing to it, and build a Grafana dashboard showing the four golden signals: latency, traffic, errors, and saturation.
+
+**Why:**
+Observability is the property of a system that makes its internal state inferrable from external outputs. The four golden signals are the standard framework for answering "is my service healthy?" in production. Understanding the difference between Counter (always increasing), Gauge (can go up or down), and Histogram (measures distributions) is a standard SRE/backend interview topic. The `socket_connections_active` Gauge is a good example of why Gauge exists — it represents a current state, not a cumulative count.
 
 ---
 

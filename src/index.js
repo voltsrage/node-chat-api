@@ -4,6 +4,8 @@ import {app} from './app.js';
 import {connectDB} from './db/connect.js';
 import {createSocketServer} from './socket/index.js';
 import { startPresenceEvictionJob } from './jobs/presenceEvictionJob.js';
+import { closeAdapterConnections } from './socket/adapter.js';
+import { redis } from './db/redis.js';
 import { logger } from './utils/logger.js';
 
 const PORT = process.env.PORT || 3090;
@@ -23,8 +25,11 @@ async function start() {
 
     // Optional: clean shutdown
     process.on('SIGTERM', () => {
+        logger.info('SIGTERM received — shutting down');
         stopEviction();
-        process.exit(0);
+        await closeAdapterConnections();
+        await redis.quit();
+        httpServer.close(() => process.exit(0));
     });
 }
 
