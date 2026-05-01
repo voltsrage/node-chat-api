@@ -2,6 +2,7 @@ import * as roomService from '../services/roomService.js';
 import { ValidationError } from '../errors/AppError.js';
 import {ApiResponse} from '../utils/ApiResponse.js';
 import { paginatedResponse, parsePaginationQuery } from '../utils/paginate.js';
+import { joinUserToRoom } from '../socket/index.js';
 
 export async function createRoom(req, res){
     const {name, description} = req.body;
@@ -27,8 +28,10 @@ export async function getRoomById(req, res){
 export async function joinRoom(req, res){
     const room = await roomService.joinRoom(req.params.id, req.user.sub);
 
-    // TODO Phase 6: look up the user's active socket by userId and call
-    // socket.join(req.params.id) so they receive real-time messages immediately
+    // Subscribe the user's active socket(s) to the room channel immediately
+    // so they receive real-time messages without reconnecting
+    const io = req.app.get('io');
+    joinUserToRoom(io, req.user.sub, req.params.id);
 
     res.json(ApiResponse.success(room));
 }
