@@ -26,10 +26,12 @@ if (process.env.NODE_ENV != 'production') {
 
 // 5. Routes are mounted here in later phases
 import { authRouter } from './routes/auth.js'
-app.use('/api/v1/auth',  authRouter);
+import { roomsRouter } from './routes/rooms.js'
 
+app.use('/api/v1/auth',  authRouter);
+app.use('/api/v1/rooms', roomsRouter);
 // app.use('/api/v1/users', usersRouter);
-// app.use('/api/v1/rooms', roomsRouter);
+
 
 // 6. Catch-all for unmatched routes — after all valid routes, before error handler
 app.use((req, res) => {
