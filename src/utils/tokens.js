@@ -27,7 +27,7 @@ export async function issueRefreshToken(userId){
 export async function validateRefreshToken(token){
     let payload;
     try{
-        payload = jwt.verify(token. process.env.JWT_REFRESH_SECRET);
+        payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
     }
     catch{
         return null;

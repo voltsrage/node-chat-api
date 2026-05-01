@@ -70,6 +70,56 @@ src/
     └── paginate.js         # Pagination helpers
 ```
 
+## Architecture Decisions
+
+### Node.js
+
+Chat is an I/O-bound problem, not a CPU-bound one. A server handling thousands of concurrent WebSocket connections spends almost all its time waiting — for database reads, Redis round-trips, and network writes — not computing. Node's single-threaded event loop with non-blocking I/O is purpose-built for this workload: it can hold tens of thousands of idle sockets open with minimal memory overhead, in a way that a thread-per-connection model (Java, .NET defaults) would not scale as cheaply. The same process that serves HTTP requests also manages Socket.io connections, which eliminates cross-process coordination for the common case.
+
+### Express 4
+
+Express is deliberately minimal. It handles routing, middleware chaining, and error propagation — nothing more. The absence of opinions on structure means the architecture here (routes → controllers → services → models) is an explicit choice, not a framework constraint, which makes the layering visible and easy to reason about. The `express-async-errors` package patches the router so async functions forward errors to the global handler without boilerplate try/catch in every controller.
+
+### MongoDB
+
+Chat messages are a natural document store: each message is self-contained, read far more often than written, and the read pattern is always "give me the last N messages in room X ordered by time" — a query that maps directly to a compound index on `{ roomId, createdAt }`. A relational schema would work, but joins between users, rooms, and messages add latency on every page load. The denormalized `senderUsername` field on each message is a deliberate trade-off: it costs a small amount of write-time overhead to keep in sync but eliminates a join on every message fetch, which is the hot path.
+
+Mongoose 9 is used as the ODM for schema validation, index definition, and query building. Schemas are defined with `{ timestamps: true }` to get `createdAt`/`updatedAt` automatically.
+
+### Redis
+
+Redis serves three distinct roles in this system, each chosen for a specific property:
+
+**Ephemeral state (presence, typing):** Sorted sets keyed by `online:users` and `presence:{roomId}` store user IDs scored by Unix timestamp. This makes "who is online?" a single `ZRANGEBYSCORE` call, and stale entries are evicted by a background job using `ZREMRANGEBYSCORE`. Typing indicators use plain TTL keys — they expire automatically after 3 seconds with no cleanup required, which avoids a race condition between "stop typing" and TTL expiry.
+
+**Auth token storage:** Refresh tokens are stored in Redis with a 7-day TTL. This enables true token revocation (logout) without a database write on every request — the access token is verified via JWT signature alone, but the refresh token is checked against Redis on each rotation, so a stolen refresh token can be invalidated instantly.
+
+**Horizontal scaling (pub/sub):** `@socket.io/redis-adapter` uses two dedicated Redis connections (one publisher, one subscriber) to route Socket.io room events between server instances. When Instance A emits to room `general`, Redis fans the event out to Instances B and C, which forward it to their locally connected sockets. This is the standard pattern for scaling Socket.io beyond a single process without introducing a message broker.
+
+### Socket.io
+
+Socket.io sits above the raw WebSocket API and provides rooms (used directly for chat rooms), automatic reconnection with exponential backoff, and a fallback to HTTP long-polling for environments where WebSockets are blocked. The built-in room abstraction means `io.to(roomId).emit(...)` handles fan-out to all members — no manual connection tracking needed. Authentication is enforced at the handshake layer via a middleware that validates the JWT before the connection is established, so unauthenticated sockets are rejected before they can consume resources.
+
+### JWT with Refresh Token Rotation
+
+Access tokens are short-lived (15 minutes) and verified purely by signature — no database lookup per request. This keeps the hot path (authenticated API calls) fast. Refresh tokens are long-lived (7 days) but stored in Redis, so they can be revoked. On each refresh, the old token is deleted and a new one is issued (rotation), which limits the window of exposure if a refresh token is intercepted. This is the standard stateless-auth-with-revocation pattern — stateless for scale, revocable for security.
+
+bcrypt with 12 rounds is used for password hashing. 12 rounds is the current industry default that balances security (slow enough to resist brute force) with latency (fast enough to not noticeably delay login).
+
+### Cursor-based Pagination
+
+Message history uses an ISO 8601 timestamp as the cursor (`before` query param) rather than offset/limit. Offset pagination on a high-write collection produces inconsistent results — if 10 messages are added while a user is paginating, offset 50 skips or duplicates messages. Cursor pagination is stable because the cursor anchors to a specific point in time, which is monotonically ordered by the `createdAt` index.
+
+### Pino for Logging
+
+Pino is the fastest Node.js logger by a significant margin (roughly 5–10x faster than Winston in benchmarks) because it writes structured JSON synchronously to stdout and defers formatting to a separate process (`pino-pretty` in development). Structured JSON logs are consumed directly by log aggregation systems (Datadog, Loki, CloudWatch) without parsing. Per-request correlation IDs are injected by middleware and attached to child loggers, so every log line for a given request carries the same `correlationId` — essential for tracing failures across a distributed system.
+
+### ES Modules (`"type": "module"`)
+
+The project uses native ES module syntax (`import`/`export`) rather than CommonJS (`require`). This is the current Node.js standard, avoids the dual-module hazard when mixing ESM and CJS packages, and aligns with how browser and edge runtimes work. All tooling (Node 18+, Mongoose 9, ioredis 5, Socket.io 4) supports ESM natively.
+
+---
+
 ## Getting Started
 
 ### Prerequisites

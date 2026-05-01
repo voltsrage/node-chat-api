@@ -38,7 +38,7 @@ export async function getMessageHistory(roomId, { before, limit } = {}) {
 
 export async function createMessage(roomId, { senderId, senderUsername, content }) {
     const isMember = await Room.exists({ _id: roomId, memberIds: senderId });
-    if (!member) {
+    if (!isMember) {
         const err = new Error('NOT_MEMBER');
         err.code = 'NOT_MEMBER';
         throw err;
@@ -81,7 +81,7 @@ export async function editMessage(messageId, userId, content) {
 export async function deleteMessage(messageId, userId) {
     const message = await Message.findOneAndUpdate(
         { _id: messageId, senderId: userId, deletedAt: null },
-        { $set: { deleteAt: new Date() } },
+        { $set: { deletedAt: new Date() } },
         { new: true }
     )
 
