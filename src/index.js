@@ -24,7 +24,7 @@ async function start() {
     httpServer.listen(PORT, () => logger.info({port: PORT}, 'Server started'))
 
     // Optional: clean shutdown
-    process.on('SIGTERM', () => {
+    process.on('SIGTERM', async () => {
         logger.info('SIGTERM received — shutting down');
         stopEviction();
         await closeAdapterConnections();

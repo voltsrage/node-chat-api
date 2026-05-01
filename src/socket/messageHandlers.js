@@ -1,4 +1,5 @@
 import * as messageService from '../services/messageService.js';
+import { checkMessageRateLimit } from './rateLimiter.js';
 
 const KNOWN_CODES = new Set([
     'NOT_MEMBER', 'EDIT_NOT_ALLOWED', 'DELETE_NOT_ALLOWED', 'INVALID_CONTENT'
@@ -21,6 +22,11 @@ export function registerMessageHandlers(io, socket){
         if(!content.trim())
             return socket.emit('error', {code: 'INVALID_CONTENT'});
 
+        const allowed = await checkMessageRateLimit(socket.user.sub);
+
+        if(!allowed)
+            return socket.emit('error', { code: 'RATE_LIMITED' });
+        
         const message = await messageService.createMessage(roomId, {
             senderId: socket.user.sub,
             senderUsername: socket.user.username,

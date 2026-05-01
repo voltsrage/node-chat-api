@@ -1,5 +1,7 @@
 import { Router } from 'express'
 import * as authController from '../controllers/authController.js'
+import { authRateLimiter } from '../middleware/rateLimiter.js';
+import {authenticate } from '../middleware/authenticate.js';
 
 export const authRouter = Router();
 
@@ -26,7 +28,7 @@ export const authRouter = Router();
  *       '409': { description: Username or email already taken }
  *       '422': { description: Missing or invalid fields }
  */
-authRouter.post('/register', authController.register);
+authRouter.post('/register', authRateLimiter, authController.register);
 
 /**
  * @openapi
@@ -49,7 +51,7 @@ authRouter.post('/register', authController.register);
  *       '200': { description: Tokens issued }
  *       '401': { description: Invalid credentials }
  */
-authRouter.post('/login', authController.login);
+authRouter.post('/login', authRateLimiter, authController.login);
 
 /**
  * @openapi
@@ -91,4 +93,4 @@ authRouter.post('/refresh', authController.refresh);
  *     responses:
  *       '200': { description: Logged out }
  */
-authRouter.post('/logout', authController.logout);
+authRouter.post('/logout', authenticate,  authController.logout);
