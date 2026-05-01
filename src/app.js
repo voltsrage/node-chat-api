@@ -25,7 +25,9 @@ if (process.env.NODE_ENV != 'production') {
 }
 
 // 5. Routes are mounted here in later phases
-// app.use('/api/v1/auth',  authRouter);
+import { authRouter } from './routes/auth.js'
+app.use('/api/v1/auth',  authRouter);
+
 // app.use('/api/v1/users', usersRouter);
 // app.use('/api/v1/rooms', roomsRouter);
 

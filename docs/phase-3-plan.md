@@ -10,7 +10,7 @@ From Phase 2:
 
 ## What needs to be built
 
-Eight steps. The central concept is the **access token / refresh token split**: access tokens are fast and stateless but unrevocable; refresh tokens are revocable but require a Redis round-trip. Implementing both makes the trade-off concrete.
+Nine steps. The central concept is the **access token / refresh token split**: access tokens are fast and stateless but unrevocable; refresh tokens are revocable but require a Redis round-trip. Implementing both makes the trade-off concrete.
 
 ---
 
@@ -256,17 +256,67 @@ export function socketAuthenticate(socket, next) {
 
 ---
 
-## Step 7 — Auth router
+## Step 7 — Auth controller
 
-JSDoc comments produce the Swagger documentation. `security: []` on public routes overrides the global bearer auth requirement defined in the Swagger config.
+The controller owns the HTTP boundary: it extracts values from `req`, validates inputs, calls the service, and sends the response. It knows about `req` and `res`. The service knows nothing about either.
+
+**`src/controllers/authController.js`:**
+
+```js
+import * as authService from '../services/authService.js';
+import { ValidationError } from '../errors/AppError.js';
+import { ApiResponse } from '../utils/ApiResponse.js';
+
+export async function register(req, res) {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password)
+    throw new ValidationError('username, email, and password are required.');
+  if (password.length < 8)
+    throw new ValidationError('Password must be at least 8 characters.');
+
+  const result = await authService.register({ username, email, password });
+  res.status(201).json(ApiResponse.created(result));
+}
+
+export async function login(req, res) {
+  const { email, password } = req.body;
+
+  if (!email || !password)
+    throw new ValidationError('email and password are required.');
+
+  const result = await authService.login({ email, password });
+  res.json(ApiResponse.success(result));
+}
+
+export async function refresh(req, res) {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken)
+    throw new ValidationError('refreshToken is required.');
+
+  const result = await authService.refresh(refreshToken);
+  res.json(ApiResponse.success(result));
+}
+
+export async function logout(req, res) {
+  const { refreshToken } = req.body;
+  if (refreshToken) await authService.logout(refreshToken);
+  res.json(ApiResponse.success(null));
+}
+```
+
+---
+
+## Step 8 — Auth route
+
+The route file is now thin: it holds the Swagger JSDoc (which documents the HTTP contract) and maps each path to a controller function. No inline handlers, no imports from service or error classes.
 
 **`src/routes/auth.js`:**
 
 ```js
 import { Router } from 'express';
-import * as authService from '../services/authService.js';
-import { ValidationError } from '../errors/AppError.js';
-import { ApiResponse } from '../utils/ApiResponse.js';
+import * as authController from '../controllers/authController.js';
 
 export const authRouter = Router();
 
@@ -293,17 +343,7 @@ export const authRouter = Router();
  *       '409': { description: Username or email already taken }
  *       '422': { description: Missing or invalid fields }
  */
-authRouter.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
-
-  if (!username || !email || !password)
-    throw new ValidationError('username, email, and password are required.');
-  if (password.length < 8)
-    throw new ValidationError('Password must be at least 8 characters.');
-
-  const result = await authService.register({ username, email, password });
-  res.status(201).json(ApiResponse.created(result));
-});
+authRouter.post('/register', authController.register);
 
 /**
  * @openapi
@@ -326,15 +366,7 @@ authRouter.post('/register', async (req, res) => {
  *       '200': { description: Tokens issued }
  *       '401': { description: Invalid credentials }
  */
-authRouter.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password)
-    throw new ValidationError('email and password are required.');
-
-  const result = await authService.login({ email, password });
-  res.json(ApiResponse.success(result));
-});
+authRouter.post('/login', authController.login);
 
 /**
  * @openapi
@@ -356,15 +388,7 @@ authRouter.post('/login', async (req, res) => {
  *       '200': { description: New tokens issued }
  *       '401': { description: Invalid or expired refresh token }
  */
-authRouter.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
-
-  if (!refreshToken)
-    throw new ValidationError('refreshToken is required.');
-
-  const result = await authService.refresh(refreshToken);
-  res.json(ApiResponse.success(result));
-});
+authRouter.post('/refresh', authController.refresh);
 
 /**
  * @openapi
@@ -384,16 +408,12 @@ authRouter.post('/refresh', async (req, res) => {
  *     responses:
  *       '200': { description: Logged out }
  */
-authRouter.post('/logout', async (req, res) => {
-  const { refreshToken } = req.body;
-  if (refreshToken) await authService.logout(refreshToken);
-  res.json(ApiResponse.success(null));
-});
+authRouter.post('/logout', authController.logout);
 ```
 
 ---
 
-## Step 8 — Mount the router in app.js
+## Step 9 — Mount the router in app.js
 
 Add one line to `src/app.js` in the routes section:
 
@@ -436,7 +456,6 @@ curl -s http://localhost:3000/api/v1/users/me
 **4. Refresh token works once, then fails (rotation):**
 
 ```bash
-# Save the refresh token from login, then:
 curl -s -X POST http://localhost:3000/api/v1/auth/refresh \
   -H 'Content-Type: application/json' \
   -d '{"refreshToken":"<token>"}'
@@ -468,8 +487,8 @@ curl -s -X POST http://localhost:3000/api/v1/auth/refresh \
 
 ```bash
 redis-cli
-> KEYS refresh:*         # shows active refresh tokens
-> TTL refresh:<userId>:<tokenId>   # confirm 7-day TTL
+> KEYS refresh:*                     # shows active refresh tokens
+> TTL refresh:<userId>:<tokenId>     # confirm 7-day TTL
 ```
 
 ---
@@ -484,7 +503,8 @@ redis-cli
 | `src/services/authService.js` | New — `register`, `login`, `refresh`, `logout`, `toPublicUser` |
 | `src/middleware/authenticate.js` | New — JWT middleware for HTTP routes |
 | `src/middleware/socketAuthenticate.js` | New — JWT middleware for Socket.io (wired in Phase 6) |
-| `src/routes/auth.js` | New — four auth endpoints with Swagger JSDoc |
+| `src/controllers/authController.js` | New — input validation, calls service, sends response |
+| `src/routes/auth.js` | New — thin: Swagger JSDoc + maps paths to controller functions |
 | `src/app.js` | Updated — mount `authRouter` at `/api/v1/auth` |
 
 ---
@@ -504,9 +524,11 @@ redis-cli
 - [ ] Step 4 — `logout` treats already-invalid token as success, not an error
 - [ ] Step 5 — `authenticate` middleware attaches decoded payload to `req.user`; throws `UnauthorizedError` for missing, invalid, or expired tokens
 - [ ] Step 6 — `socketAuthenticate` reads token from `socket.handshake.auth.token`; calls `next(new Error('UNAUTHORIZED'))` on failure
-- [ ] Step 7 — all four routes return the standard `ApiResponse` envelope
-- [ ] Step 7 — public routes annotated with `security: []` in JSDoc
-- [ ] Step 8 — `authRouter` mounted at `/api/v1/auth` in `app.js`
+- [ ] Step 7 — controller imports only from service, error classes, and `ApiResponse` — not from route or middleware
+- [ ] Step 7 — all input validation lives in the controller, not the service
+- [ ] Step 8 — route file imports only from controller; no inline handler functions
+- [ ] Step 8 — Swagger JSDoc on the route; public routes annotated with `security: []`
+- [ ] Step 9 — `authRouter` mounted at `/api/v1/auth` in `app.js`
 - [ ] Verification — register returns 201 with both tokens
 - [ ] Verification — second use of the same refresh token returns 401 (rotation working)
 - [ ] Verification — logout + subsequent refresh returns 401 (revocation working)
