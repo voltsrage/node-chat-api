@@ -2,6 +2,7 @@ import { Router } from 'express'
 import * as authController from '../controllers/authController.js'
 import { authRateLimiter } from '../middleware/rateLimiter.js';
 import {authenticate } from '../middleware/authenticate.js';
+import {requireVerified} from '../middleware/requireVerified.js';
 
 export const authRouter = Router();
 
@@ -94,3 +95,30 @@ authRouter.post('/refresh', authController.refresh);
  *       '200': { description: Logged out }
  */
 authRouter.post('/logout', authenticate,  authController.logout);
+
+/**
+ * @openapi
+ * /auth/verify-email:
+ *   get:
+ *     summary: Verify email address using a token from the verification email
+ *     tags: [Auth]
+ *     parameters:
+ *       - { name: token, in: query, required: true, schema: { type: string } }
+ *     responses:
+ *       '200': { description: Email verified }
+ *       '422': { description: Invalid or expired token }
+ */
+authRouter.get('/verify-email', authController.verifyEmail);
+
+/**
+ * @openapi
+ * /auth/resend-verification:
+ *   post:
+ *     summary: Resend verification email (max 3 per hour)
+ *     tags: [Auth]
+ *     responses:
+ *       '200': { description: Email sent }
+ *       '422': { description: Email already verified }
+ *       '429': { description: Rate limit exceeded }
+ */
+authRouter.post('/resend-verification', authenticate, authController.resendVerification);

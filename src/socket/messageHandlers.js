@@ -22,6 +22,10 @@ export function registerMessageHandlers(io, socket){
         if(!content.trim())
             return socket.emit('error', {code: 'INVALID_CONTENT'});
 
+        // verified flag comes from the JWT decoded in socketAuthenticate
+        if(!socket.user.verified)
+            return socket.emit('error', {code: 'UNVERIFIED'});
+
         const allowed = await checkMessageRateLimit(socket.user.sub);
 
         if(!allowed)

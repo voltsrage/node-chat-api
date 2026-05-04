@@ -43,3 +43,17 @@ export async function logout(req, res) {
 
     res.json(ApiResponse.success(null))
 }
+
+export async function verifyEmail(req, res){
+    await authService.verifyEmail(req.query.token);
+    // Instruct the client to refresh their access token — the old token
+    // still has verified: false until a new one is issued
+    res.json(ApiResponse.success({
+        message: 'Email verified. Call POST /auth/refresh to update your access token'
+    }));
+}
+
+export async function resendVerification(req, res){
+    await authService.resendVerification(req.user.sub);
+    res.json(ApiResponse.success({message: 'Verification email sent'}));
+}

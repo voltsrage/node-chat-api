@@ -3,6 +3,7 @@ import {authenticate} from '../middleware/authenticate.js';
 import * as roomController from '../controllers/roomController.js';
 import * as messageController from '../controllers/messageController.js';
 import * as presenceController from '../controllers/presenceController.js';
+import {requireVerified} from '../middleware/requireVerified.js'
 
 export const roomsRouter = Router();
 roomsRouter.use(authenticate);
@@ -27,7 +28,7 @@ roomsRouter.use(authenticate);
  *       '201': { description: Room created }
  *       '409': { description: Room name already taken }
  */
-roomsRouter.post('/', roomController.createRoom);
+roomsRouter.post('/', requireVerified, roomController.createRoom);
 
 /**
  * @openapi
@@ -69,7 +70,7 @@ roomsRouter.get('/:id', roomController.getRoomById);
  *       '200': { description: Joined room }
  *       '404': { description: Room not found }
  */
-roomsRouter.post('/:id/join', roomController.joinRoom);
+roomsRouter.post('/:id/join', requireVerified, roomController.joinRoom);
 
 /**
  * @openapi

@@ -5,9 +5,13 @@ import {redis} from '../db/redis.js'
 const ACCESS_TTL_SEC  = 15 * 60;         // 15 minutes
 const REFRESH_TTL_SEC = 7 * 24 * 3600;  // 7 days
 
-export function signAccessToken(userId, username){
+export function signAccessToken(user){
     return jwt.sign(
-        {sub: userId, username},
+        {
+            sub: user._id, 
+            username : user.username,
+            verified: user.verified ?? false
+        },
         process.env.JWT_SECRET,
         {expiresIn: ACCESS_TTL_SEC}
     )
