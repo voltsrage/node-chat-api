@@ -57,3 +57,21 @@ export async function resendVerification(req, res){
     await authService.resendVerification(req.user.sub);
     res.json(ApiResponse.success({message: 'Verification email sent'}));
 }
+
+export async function forgotPassword(req, res){
+    const {email} = req.body;
+    // Always 200 - do not confirm whether the email is registered
+    if(email) await authService.forgotPassword(email);
+    res.json(ApiResponse.success({
+        message: 'If that email is registered, a reset link has been sent.',
+    }));
+}
+
+export async function resetPassword(req, res){
+    const {newPassword} = req.body;
+    const {token} = req.query;
+    await authService.resetPassword(token, newPassword);
+    res.json(ApiResponse.success({
+        message: 'Password updated. All existing sessions have been invalidated.',
+    }));
+}

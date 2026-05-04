@@ -122,3 +122,47 @@ authRouter.get('/verify-email', authController.verifyEmail);
  *       '429': { description: Rate limit exceeded }
  */
 authRouter.post('/resend-verification', authenticate, authController.resendVerification);
+
+/**
+ * @openapi
+ * /auth/forgot-password:
+ *   post:
+ *     summary: Request a password reset email
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *     responses:
+ *       '200':
+ *         description: Always 200 — does not confirm whether the email is registered
+ */
+authRouter.post('/forgot-password', authRateLimiter, authController.forgotPassword);
+
+/**
+ * @openapi
+ * /auth/reset-password:
+ *   post:
+ *     summary: Reset password using a token from the reset email
+ *     tags: [Auth]
+ *     parameters:
+ *       - { name: token, in: query, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newPassword]
+ *             properties:
+ *               newPassword: { type: string, minLength: 8 }
+ *     responses:
+ *       '200': { description: Password updated; all sessions invalidated }
+ *       '422': { description: Invalid or expired token, or weak password }
+ */
+authRouter.post('/reset-password', authController.resetPassword);

@@ -37,7 +37,13 @@ export class TooManyRequestsError extends AppError {
 }
 
 export class ForbiddenError extends AppError {
-  constructor(message = 'Forbidden.', code = 'FORBIDDEN') {
-    super(message, 403, code);
-  }
+    constructor(message = 'Forbidden.', code = 'FORBIDDEN') {
+        super(message, 403, code);
+    }
+}
+
+export class LockedError extends AppError {
+    constructor(message="Account temporarily locked,", code='ACCOUNT_LOCKED'){
+        super(message, 423, code);
+    }
 }
