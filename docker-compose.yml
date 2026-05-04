@@ -1,5 +1,6 @@
 services:
   api:
+    image: ${API_IMAGE:-teamchat-api:local}
     build: .
     env_file: .env.dev
     environment:
