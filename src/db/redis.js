@@ -1,7 +1,7 @@
 import Redis from "ioredis";
 import { logger } from "../utils/logger.js";
 
-export const redis = new Redis(process.env.REDID_URL, {
+export const redis = new Redis(process.env.REDIS_URL, {
     retryStrategy(times) {
         return Math.min(times*100,  3000)
     }

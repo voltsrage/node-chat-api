@@ -9,6 +9,10 @@ import { swaggerRouter } from './swagger.js'
 
 export const app = express();
 
+// Trust the first proxy (Nginx). Required for req.ip to return the real
+// client IP instead of Nginx's internal container IP.
+app.set('trust proxy', 1);
+
 // 1. Request logging — must be first so every request is captured including those
 //    that fail body parsing or hit unmatched routes.
 app.use(pinoHttp({ logger }));

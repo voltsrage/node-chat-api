@@ -1,0 +1,25 @@
+services:
+  api:
+    build: .
+    env_file: .env.dev
+    environment:
+      - NODE_ENV=development
+    networks:
+      - local-services
+    restart: unless-stopped
+  
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "3090:80"        # Only nginx faces the internet
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    networks:
+      - local-services
+    restart: unless-stopped
+
+networks:
+  local-services:
+    external: true

@@ -28,7 +28,7 @@ export const pubClient = new Redis(process.env.REDIS_URL, {
     }
 });
 
-export const subClient = pubClient.duplicate();
+export const subClient = pubClient.duplicate({ enableReadyCheck: false });
 
 pubClient.on('error', (err) => logger.error({ err }, 'Redis pub client error'));
 subClient.on('error', (err) => logger.error({ err }, 'Redis sub client error'));
