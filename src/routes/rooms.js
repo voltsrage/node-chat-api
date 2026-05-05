@@ -4,6 +4,7 @@ import * as roomController from '../controllers/roomController.js';
 import * as messageController from '../controllers/messageController.js';
 import * as presenceController from '../controllers/presenceController.js';
 import {requireVerified} from '../middleware/requireVerified.js'
+import { requireMember } from "../middleware/requireMember.js";
 
 export const roomsRouter = Router();
 roomsRouter.use(authenticate);
@@ -44,6 +45,26 @@ roomsRouter.post('/', requireVerified, roomController.createRoom);
  */
 roomsRouter.get('/', roomController.listRooms);
 
+
+/**
+ * @openapi
+ * /rooms/join-invite:
+ *   post:
+ *     summary: Join a room via invite token
+ *     tags: [Rooms]
+ *     parameters:
+ *       - name: token
+ *         in: query
+ *         required: true
+ *         description: Single-use invite token from an invite URL
+ *         schema: { type: string }
+ *     responses:
+ *       '200': { description: Joined room successfully }
+ *       '400': { description: Missing, invalid, or expired invite token }
+ *       '404': { description: Room no longer exists }
+ */
+roomsRouter.post('/join-invite', requireVerified, roomController.joinViaInvite);
+
 /**
  * @openapi
  * /rooms/{id}:
@@ -56,7 +77,7 @@ roomsRouter.get('/', roomController.listRooms);
  *       '200': { description: Room details }
  *       '404': { description: Room not found }
  */
-roomsRouter.get('/:id', roomController.getRoomById);
+roomsRouter.get('/:id',requireMember, roomController.getRoomById);
 
 /**
  * @openapi
@@ -70,7 +91,7 @@ roomsRouter.get('/:id', roomController.getRoomById);
  *       '200': { description: Joined room }
  *       '404': { description: Room not found }
  */
-roomsRouter.post('/:id/join', requireVerified, roomController.joinRoom);
+roomsRouter.post('/:id/join', requireMember, requireVerified, roomController.joinRoom);
 
 /**
  * @openapi
@@ -84,7 +105,7 @@ roomsRouter.post('/:id/join', requireVerified, roomController.joinRoom);
  *       '200': { description: Left room }
  *       '404': { description: Room not found }
  */
-roomsRouter.post('/:id/leave', roomController.leaveRoom);
+roomsRouter.post('/:id/leave',requireMember, roomController.leaveRoom);
 
 /**
  * @openapi
@@ -100,7 +121,7 @@ roomsRouter.post('/:id/leave', roomController.leaveRoom);
  *       '200': { description: Paginated member list }
  *       '404': { description: Room not found }
  */
-roomsRouter.get('/:id/members', roomController.listMembers);
+roomsRouter.get('/:id/members', requireMember, roomController.listMembers);
 
 /**
  * @openapi
@@ -128,7 +149,7 @@ roomsRouter.get('/:id/members', roomController.listMembers);
  *                 hasMore:    { type: boolean }
  *       '404': { description: Room not found }
  */
-roomsRouter.get('/:id/messages', messageController.getMessageHistory)
+roomsRouter.get('/:id/messages',requireMember, messageController.getMessageHistory)
 
 /**
  * @openapi
@@ -149,4 +170,28 @@ roomsRouter.get('/:id/messages', messageController.getMessageHistory)
  *                 users: { type: array }
  *                 count: { type: integer }
  */
-roomsRouter.get('/:id/presence', presenceController.getRoomPresence);
+roomsRouter.get('/:id/presence',requireMember, presenceController.getRoomPresence);
+
+/**
+ * @openapi
+ * /rooms/{id}/invite:
+ *   post:
+ *     summary: Create an invite link for a room
+ *     description: Generates a single-use invite token valid for 48 hours. Only room members can create invites. Returns 403 for both non-existent rooms and non-members to avoid leaking whether a private room exists.
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string } }
+ *     responses:
+ *       '200':
+ *         description: Invite created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:     { type: string }
+ *                 inviteUrl: { type: string }
+ *                 expiresIn: { type: string, example: '48 hours' }
+ *       '403': { description: Room not found or caller is not a member }
+ */
+roomsRouter.post('/:id/invite', requireMember, requireVerified, roomController.createInvite);

@@ -5,17 +5,18 @@ import { paginatedResponse, parsePaginationQuery } from '../utils/paginate.js';
 import { joinUserToRoom } from '../socket/index.js';
 
 export async function createRoom(req, res){
-    const {name, description} = req.body;
+    const {name, description, isPrivate} = req.body;
     if(!name ) throw new ValidationError('name is required.');
 
-    const room = await roomService.createRoom(req.user.sub, {name, description});
+    const room = await roomService.createRoom(req.user.sub, {name, description, isPrivate});
 
     res.status(201).json(ApiResponse.created(room));
 }
 
 export async function listRooms(req, res){
     const pagination = parsePaginationQuery(req.query);
-    const result = await roomService.listRooms(pagination);
+
+    const result = await roomService.listRooms(pagination, req.user.sub);
 
     res.json(ApiResponse.success(result));
 }
@@ -46,4 +47,14 @@ export async function listMembers(req, res){
     const result = await roomService.listMembers(req.params.id, pagination);
 
     res.json(ApiResponse.success(result));
+}
+
+export async function createInvite(req, res){
+    const invite = await roomService.createInvite(req.params.id, req.user.sub);
+    res.json(ApiResponse.success(invite));
+}
+
+export async function joinViaInvite(req, res){
+    const room = await roomService.joinViaInvite(req.query.token, req.user.sub);
+    res.json(ApiResponse.success(room));
 }

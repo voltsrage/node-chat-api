@@ -7,7 +7,8 @@ const roomSchema = new mongoose.Schema(
         createdBy: {type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true},
         // Indexes are declared here to be explicit — never rely on Mongoose to infer
         // the right index from `unique: true` alone without verification.
-        memberIds : [{type: mongoose.Schema.Types.ObjectId, ref: 'User'}]
+        memberIds : [{type: mongoose.Schema.Types.ObjectId, ref: 'User'}],
+        isPrivate: {type: Boolean, default: false}
     },
     {timestamps: {createdAt: true, updatedAt: true}}
 );
