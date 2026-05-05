@@ -189,7 +189,7 @@ SMTP_PASS=your-mailtrap-pass
 SMTP_FROM=noreply@teamchat.example.com
 
 # Base URL used in email links
-APP_URL=http://localhost:3000
+APP_URL=http://localhost:3090
 ```
 
 ### Seed (optional)
@@ -216,8 +216,8 @@ npm start
 node src/workers/emailWorker.js
 ```
 
-API docs available at `http://localhost:3000/swagger` (development only).  
-Queue monitoring UI available at `http://localhost:3000/admin/queues`.
+API docs available at `http://localhost:3090/swagger` (development only).  
+Queue monitoring UI available at `http://localhost:3090/admin/queues`.
 
 ## API Reference
 
@@ -286,7 +286,7 @@ Responses follow a standard envelope:
 Connect with:
 
 ```js
-const socket = io("http://localhost:3000", {
+const socket = io("http://localhost:3090", {
   auth: { token: "<access_token>" }
 });
 ```

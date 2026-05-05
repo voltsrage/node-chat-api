@@ -2,7 +2,7 @@ import * as messageService from '../services/messageService.js';
 import { checkMessageRateLimit } from './rateLimiter.js';
 
 const KNOWN_CODES = new Set([
-    'NOT_MEMBER', 'EDIT_NOT_ALLOWED', 'DELETE_NOT_ALLOWED', 'INVALID_CONTENT'
+    'NOT_MEMBER', 'EDIT_NOT_ALLOWED', 'DELETE_NOT_ALLOWED', 'INVALID_CONTENT', 'INVALID_EMOJI', 'MESSAGE_NOT_FOUND'
 ]);
 
 // safe is a local wrapper that catches thrown errors and emits them to the client. 
@@ -59,5 +59,32 @@ export function registerMessageHandlers(io, socket){
             roomId: result.roomId
         })
     }));
+
+    socket.on('message:react', safe(socket, async({messageId, emoji} = {}) => {
+        if(!emoji) return socket.emit('error', {code: 'INVALID_EMOJI'});
+
+        const message = await messageService.toggleReaction(
+            messageId,
+            socket.user.sub,
+            emoji
+        )
+
+        /*
+            **Why `io.to()` not `socket.to()`:**
+
+            The sender also needs to see their own reaction applied in real time. 
+            `io.to(room)` broadcasts to the entire room including the sender. `socket.to(room)` excludes the sender — 
+            appropriate for typing indicators (you don't need to see your own typing indicator) 
+            but wrong for reactions (you need to see your own emoji added to the count).
+         */
+        // Broadcast only the updated reactions - not the full message.
+        // The client already has the message content; it only needs to
+        // update its reaction display
+        io.to(message.roomId.toString()).emit('message:reaction', {
+            messageId: message.id,
+            roomId: message.roomId,
+            reactions: message.reactions
+        });
+    }))
     
 };
