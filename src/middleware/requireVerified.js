@@ -1,4 +1,4 @@
-import { ForbiddenError } from "../errors/AppError";
+import { ForbiddenError } from "../errors/AppError.js";
 
 export function requireVerified(req, _res, next) {
     if(!req.user.verified){

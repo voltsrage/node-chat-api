@@ -21,6 +21,16 @@ services:
       - local-services
     restart: unless-stopped
 
+  worker:
+    build: .
+    command: node src/workers/emailWorker.js
+    env_file: .env.dev
+    environment:
+      - NODE_ENV=development
+    networks:
+      - local-services
+    restart: unless-stopped
+
 networks:
   local-services:
     external: true

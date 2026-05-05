@@ -58,7 +58,7 @@ export async function createMessage(roomId, { senderId, senderUsername, content 
 export async function editMessage(messageId, userId, content) {
     const windowStart = new Date(Date.now() - 15 * 60 * 1000);
 
-    const message = await Message.findOneAndReplace(
+    const message = await Message.findOneAndUpdate(
         {
             _id: messageId,
             senderId: userId,

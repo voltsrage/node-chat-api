@@ -8,7 +8,7 @@ const messageSchema = new mongoose.Schema(
         content: {type: String, required: true},
         type: {type: String, enum: ['text', 'system'], default: 'text'},
         editedAt: {type: Date, default: null},
-        deleteAt: {type: Date, default: null}
+        deletedAt: {type: Date, default: null}
     },
     {timestamps: {createdAt: true, updatedAt: true}}
 );

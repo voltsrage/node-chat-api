@@ -33,11 +33,13 @@ import { authRouter } from './routes/auth.js'
 import { roomsRouter } from './routes/rooms.js'
 import { usersRouter } from './routes/users.js'
 import { healthRouter } from './routes/health.js'
+import { adminRouter } from './routes/admin.js'
 
 app.use('/api/v1/auth',  authRouter);
 app.use('/api/v1/rooms', roomsRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/health', healthRouter)
+app.use('/admin/queues', adminRouter)
 
 
 // 6. Catch-all for unmatched routes — after all valid routes, before error handler

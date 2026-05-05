@@ -9,7 +9,7 @@ import {
 }
     from '../utils/tokens.js';
 import { randomBytes } from 'crypto';
-import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
+import { emailQueue } from '../queues/email.queue.js';
 import { redis } from '../db/redis.js';
 
 const BCRYPT_ROUNDS = 12;
@@ -44,8 +44,8 @@ export async function register({ username, email, password }) {
     // This avoids MongoDB — Redis expiry handles cleanup automatically
     await redis.set(`email-verify:${token}`, user._id.toString(), 'EX', VERIFY_TOKEN_TTL);
 
-    // Send email (synchronous here; Phase 16 moves this into a BullMQ job)
-    await sendVerificationEmail(email, token)
+    // Enqueue instead of await - returns in <5ms regardless of SMTP availability
+    await emailQueue.add('send-verification', {to:email, token});
 
     const accessToken = signAccessToken(user);
     const refreshToken = await issueRefreshToken(user._id.toString());
@@ -97,7 +97,8 @@ export async function resendVerification(userId) {
     const token = randomBytes(32).toString('hex');
     await redis.set(`email-verify:${token}`, userId.toString(), 'EX', VERIFY_TOKEN_TTL);
 
-    await sendVerificationEmail(user.email, token);
+    // Enqueue instead of await - returns in <5ms regardless of SMTP availability
+    await emailQueue.add('send-verification', {to:email, token});
 }
 
 
@@ -203,7 +204,9 @@ export async function forgotPassword(email) {
 
     const token = randomBytes(32).toString('hex');
     await redis.set(`pwd-reset:${token}`, user._id.toString(), 'EX', RESET_TOKEN_TTL);
-    await sendPasswordResetEmail(email, token);
+    
+    // Enqueue instead of await - returns in <5ms regardless of SMTP availability
+    await emailQueue.add('send-verification', {to:email, token});
 }
 
 async function invalidateAllRefreshTokens(userId){

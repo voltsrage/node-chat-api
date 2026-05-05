@@ -5,10 +5,15 @@ A production-quality real-time team chat backend built with Node.js, Express, So
 ## Features
 
 - **Authentication** — JWT access tokens (15 min) + refresh tokens (7 days) stored in Redis for revocation
+- **Email Verification** — accounts must verify their email before accessing protected actions; tokens stored in Redis with a 24-hour TTL
+- **Password Reset** — secure token-based password reset via email; always returns 200 to prevent email enumeration
 - **Rooms** — create, join, leave, and list rooms with Redis caching
 - **Real-time Messaging** — send, edit (within 15 min), and soft-delete messages over WebSockets
 - **Typing Indicators** — ephemeral Redis TTL-based typing state broadcast to room members
 - **Presence** — online/offline tracking per user and per room using Redis sorted sets, with a background eviction job for crashed clients
+- **Rate Limiting** — Redis-backed fixed-window limiter on auth endpoints (10 req / 15 min per IP); sliding-window limiter on WebSocket message events (30 msg / 60 s per user)
+- **Async Email Queue** — BullMQ job queue for reliable email delivery with exponential backoff retries and Bull Board monitoring UI
+- **Health Checks** — liveness and readiness probes for container orchestration
 - **Horizontal Scaling** — Socket.io Redis pub/sub adapter for multi-instance deployments
 - **Observability** — structured Pino logging, per-request correlation IDs, Swagger UI
 
@@ -17,11 +22,12 @@ A production-quality real-time team chat backend built with Node.js, Express, So
 ```
 HTTP request  → Express (routes → controllers → services → models)
 WebSocket     → Socket.io → Redis adapter → other instances
-Ephemeral     → Redis (presence, typing, refresh tokens, room cache)
+Email         → BullMQ queue (Redis) → Email worker process → SMTP
+Ephemeral     → Redis (presence, typing, refresh tokens, rate limits, room cache)
 Persistent    → MongoDB (users, rooms, messages)
 ```
 
-Multi-instance scaling works via two dedicated Redis connections — one for publishing, one for subscribing — wired through `@socket.io/redis-adapter`.
+The email worker runs as a **separate process** from the API server. The API enqueues jobs in Redis and returns immediately; the worker picks them up independently and retries on failure. Multi-instance scaling works via two dedicated Redis connections wired through `@socket.io/redis-adapter`.
 
 ## Tech Stack
 
@@ -31,6 +37,9 @@ Multi-instance scaling works via two dedicated Redis connections — one for pub
 | WebSockets | Socket.io 4 |
 | Database | MongoDB (Mongoose 9) |
 | Cache / Pub-Sub | Redis (ioredis 5) |
+| Job Queue | BullMQ 5 |
+| Email | Nodemailer 8 |
+| Queue UI | Bull Board 7 |
 | Auth | JWT (`jsonwebtoken`), bcrypt |
 | Logging | Pino + pino-http |
 | Docs | Swagger UI (`swagger-jsdoc`) |
@@ -46,17 +55,30 @@ src/
 │   ├── connect.js          # MongoDB connection
 │   └── redis.js            # Shared Redis client
 ├── models/                 # Mongoose schemas (User, Room, Message)
-├── routes/                 # Express routers (auth, rooms, users)
+├── routes/                 # Express routers
+│   ├── auth.js             # Auth endpoints
+│   ├── rooms.js            # Room + message endpoints
+│   ├── users.js            # User profile endpoints
+│   ├── health.js           # Liveness + readiness probes
+│   └── admin.js            # Bull Board queue monitoring UI
 ├── controllers/            # Route handlers — thin layer, delegates to services
 ├── services/               # Business logic (auth, rooms, messages, presence, users)
+├── queues/
+│   ├── connection.js       # Dedicated Redis connection for BullMQ
+│   └── email.queue.js      # Email job queue (attempts, backoff, retention)
+├── workers/
+│   └── emailWorker.js      # Processes email jobs — run as a separate process
 ├── socket/
 │   ├── index.js            # Socket.io server, connection/disconnection lifecycle
 │   ├── adapter.js          # Redis pub/sub adapter setup
 │   ├── messageHandlers.js  # message:send / edit / delete events
-│   └── typingHandlers.js   # typing:start / stop events
+│   ├── typingHandlers.js   # typing:start / stop events
+│   └── rateLimiter.js      # Sliding-window rate limiter for WebSocket events
 ├── middleware/
 │   ├── authenticate.js     # JWT verification for HTTP routes
 │   ├── socketAuthenticate.js # JWT verification for Socket.io handshake
+│   ├── requireVerified.js  # Blocks requests from unverified accounts
+│   ├── rateLimiter.js      # Redis-backed fixed-window HTTP rate limiter
 │   ├── correlationId.js    # Per-request UUID tracing
 │   └── errorHandler.js     # Global error handler
 ├── jobs/
@@ -65,6 +87,7 @@ src/
 │   └── AppError.js         # Custom error classes (NotFound, Validation, Conflict, …)
 └── utils/
     ├── ApiResponse.js      # Standard { success, statusCode, data, error } envelope
+    ├── email.js            # Nodemailer transport + email templates
     ├── logger.js           # Pino instance
     ├── tokens.js           # JWT sign/verify + refresh token Redis storage
     └── paginate.js         # Pagination helpers
@@ -88,13 +111,19 @@ Mongoose 9 is used as the ODM for schema validation, index definition, and query
 
 ### Redis
 
-Redis serves three distinct roles in this system, each chosen for a specific property:
+Redis serves four distinct roles in this system, each chosen for a specific property:
 
 **Ephemeral state (presence, typing):** Sorted sets keyed by `online:users` and `presence:{roomId}` store user IDs scored by Unix timestamp. This makes "who is online?" a single `ZRANGEBYSCORE` call, and stale entries are evicted by a background job using `ZREMRANGEBYSCORE`. Typing indicators use plain TTL keys — they expire automatically after 3 seconds with no cleanup required, which avoids a race condition between "stop typing" and TTL expiry.
 
 **Auth token storage:** Refresh tokens are stored in Redis with a 7-day TTL. This enables true token revocation (logout) without a database write on every request — the access token is verified via JWT signature alone, but the refresh token is checked against Redis on each rotation, so a stolen refresh token can be invalidated instantly.
 
+**Rate limiting:** Auth endpoints use a Redis-backed fixed-window counter with a Lua script (`SET NX` + `INCR`) to guarantee atomic increment-and-set. WebSocket message events use a sliding-window sorted set (ZSET scored by timestamp) so burst traffic cannot exploit window boundaries. Both strategies use `req.ip` or `userId` as the key identifier, namespaced under `rl:*`.
+
 **Horizontal scaling (pub/sub):** `@socket.io/redis-adapter` uses two dedicated Redis connections (one publisher, one subscriber) to route Socket.io room events between server instances. When Instance A emits to room `general`, Redis fans the event out to Instances B and C, which forward it to their locally connected sockets. This is the standard pattern for scaling Socket.io beyond a single process without introducing a message broker.
+
+### BullMQ for Email
+
+Sending email over SMTP is slow and unreliable — doing it synchronously inside a request handler blocks the response and fails if the SMTP server is temporarily down. BullMQ decouples delivery: the API enqueues a job in Redis and returns immediately; a separate worker process picks up the job and handles the SMTP call with exponential backoff retries (5s → 25s → 125s). The worker runs as a distinct OS process and can be restarted independently. See [docs/bullmq-guide.md](docs/bullmq-guide.md) for a full explanation.
 
 ### Socket.io
 
@@ -127,6 +156,7 @@ The project uses native ES module syntax (`import`/`export`) rather than CommonJ
 - Node.js 18+
 - MongoDB 6+
 - Redis 7+
+- An SMTP server or provider (e.g. Mailtrap for development, SendGrid for production)
 
 ### Install
 
@@ -149,25 +179,45 @@ LOG_LEVEL=info
 JWT_SECRET=change-me-in-production
 JWT_REFRESH_SECRET=another-secret-change-me-in-production
 REDIS_URL=redis://localhost:6379
+
+# SMTP — use Mailtrap or similar in development
+SMTP_HOST=smtp.mailtrap.io
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-mailtrap-user
+SMTP_PASS=your-mailtrap-pass
+SMTP_FROM=noreply@teamchat.example.com
+
+# Base URL used in email links
+APP_URL=http://localhost:3000
 ```
 
 ### Seed (optional)
 
 ```bash
-node src/seed/seed.js
+npm run seed
 ```
 
 ### Run
+
+The API server and email worker are separate processes:
 
 ```bash
 # Development (auto-reload)
 npm run dev
 
-# Production
-npm start
+# Email worker (in a separate terminal)
+node src/workers/emailWorker.js
 ```
 
-API docs available at `http://localhost:3000/swagger` (development only).
+```bash
+# Production
+npm start
+node src/workers/emailWorker.js
+```
+
+API docs available at `http://localhost:3000/swagger` (development only).  
+Queue monitoring UI available at `http://localhost:3000/admin/queues`.
 
 ## API Reference
 
@@ -187,10 +237,14 @@ Responses follow a standard envelope:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/auth/register` | — | Register user, returns tokens |
+| POST | `/auth/register` | — | Register user, sends verification email, returns tokens |
 | POST | `/auth/login` | — | Login, returns tokens |
 | POST | `/auth/refresh` | — | Exchange refresh token for new access token |
 | POST | `/auth/logout` | ✓ | Revoke refresh token |
+| GET | `/auth/verify-email?token=` | — | Verify email address from link in email |
+| POST | `/auth/resend-verification` | ✓ | Resend verification email (max 3 per hour) |
+| POST | `/auth/forgot-password` | — | Request password reset email (always 200) |
+| POST | `/auth/reset-password?token=` | — | Reset password using token from email |
 
 ### Users
 
@@ -219,6 +273,13 @@ Responses follow a standard envelope:
 |---|---|---|---|
 | `before` | now | — | ISO timestamp cursor |
 | `limit` | 50 | 100 | Messages per page |
+
+### Health
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/health` | — | Liveness probe — always 200 if the process is running |
+| GET | `/health/ready` | — | Readiness probe — 200 if MongoDB and Redis are reachable, 503 otherwise |
 
 ## WebSocket Events
 
@@ -262,6 +323,7 @@ email       String  unique, required (lowercase)
 passwordHash String  required, never returned in responses
 displayName String  nullable
 avatarUrl   String  nullable
+verified    Boolean default: false
 createdAt / updatedAt
 ```
 
@@ -306,6 +368,15 @@ A background job runs every 60 seconds to evict entries older than 5 minutes, ha
 
 Multi-tab support: a user is only marked offline when their *last* socket disconnects.
 
+## Rate Limiting
+
+| Scope | Strategy | Limit | Key |
+|---|---|---|---|
+| Auth endpoints (HTTP) | Fixed window (Lua) | 10 req / 15 min | `rl:auth:{ip}` |
+| `message:send` (WebSocket) | Sliding window (ZSET) | 30 msg / 60 s | `rl:msg:{userId}` |
+
+Auth endpoints use a single atomic Redis Lua script (`INCR` + `EXPIRE`) for fixed-window counting. WebSocket message events use a sorted set scored by timestamp so boundary bursts are prevented. Both limiters propagate `TooManyRequestsError` through the standard error handler.
+
 ## Scaling
 
 To run multiple instances, point all of them at the same Redis and MongoDB. The Redis pub/sub adapter routes Socket.io events between instances transparently.
@@ -316,6 +387,8 @@ Instance A ──┐              ┌── Instance B
                   │
              MongoDB (shared)
 ```
+
+The email worker can also be scaled independently — multiple worker processes compete for jobs from the same Redis queue, and BullMQ ensures each job is processed exactly once.
 
 ## Implemented Phases
 
@@ -329,15 +402,15 @@ Instance A ──┐              ┌── Instance B
 | 6 | Real-time messaging and typing indicators |
 | 7 | Presence system with Redis sorted sets |
 | 8 | Redis pub/sub adapter for horizontal scaling |
+| 9 | Rate limiting (HTTP fixed window + WebSocket sliding window) |
+| 10 | Health checks (liveness + readiness probes) |
+| 14 | Email verification |
+| 15 | Password reset |
+| 16 | Async email queue (BullMQ + Bull Board) |
 
 ## Roadmap
 
 | Phase | Feature |
 |---|---|
-| 9 | Rate limiting |
-| 10 | Health checks |
 | 11 | Docker Compose and deployment |
 | 12 | CI/CD pipeline |
-| 14 | Email verification |
-| 15 | Password reset and account lockout |
-| 16 | Async job queue (BullMQ) |
