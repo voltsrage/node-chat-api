@@ -1,4 +1,5 @@
 import * as messageService from '../services/messageService.js';
+import * as unreadService from '../services/unreadService.js';
 import { checkMessageRateLimit } from './rateLimiter.js';
 
 const KNOWN_CODES = new Set([
@@ -17,6 +18,13 @@ const safe = (socket, fn) => async (data = {}) => {
     }
 };
 
+/*
+    **Fire-and-forget with `.catch`:**
+
+    `incrementUnread` is not `await`ed. The message has already been saved and broadcast — 
+    the unread count is a derived convenience value. If the counter write fails, the message is not lost. 
+    The `.catch` ensures the unhandled promise rejection does not surface as an unhandled error in Node.js.
+*/
 export function registerMessageHandlers(io, socket){
     socket.on('message:send', safe(socket, async ({roomId, content}) => {
         if(!content.trim())
@@ -38,6 +46,13 @@ export function registerMessageHandlers(io, socket){
         });
 
         io.to(roomId).emit('message:new', message);
+
+        // Fan-out: increment unread counter for all room members except the sender.
+        // Fire-and-forget — do not await; a counter failure should not affect
+        // the message delivery that already succeeded.
+        unreadService.incrementUnread(roomId, socket.user.sub).catch((err) =>
+            logger.error({ err, roomId }, 'Failed to increment unread counts')
+        );
     }));
 
     // message:edit broadcasts to the whole room — including the sender — so all open tabs update simultaneously.

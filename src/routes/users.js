@@ -5,6 +5,29 @@ import * as userController from '../controllers/userController.js';
 export const usersRouter = Router();
 usersRouter.use(authenticate);
 
+
+/**
+ * @openapi
+ * /users/me/unread:
+ *   get:
+ *     summary: Get unread message counts for all rooms
+ *     tags: [Users]
+ *     responses:
+ *       '200':
+ *         description: Map of roomId to unread count (only rooms with count > 0)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 counts:
+ *                   type: object
+ *                   additionalProperties: { type: integer }
+ *             example:
+ *               counts: { "roomId1": 5, "roomId2": 12 }
+ */
+usersRouter.get('me/unread', userController.getUnreadCounts);
+
 /**
  * @openapi
  * /users/me:

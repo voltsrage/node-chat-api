@@ -3,6 +3,7 @@ import {User} from '../models/User.js';
 import {redis} from '../db/redis.js';
 import {NotFoundError} from '../errors/AppError.js'
 import { paginatedResponse } from '../utils/paginate.js';
+import { clearUnread } from './unreadService.js';
 
 const ROOM_CACHE_TTL = 5 * 60;
 const cacheKey = (id) => `room:${id}`;
@@ -70,6 +71,9 @@ export async function leaveRoom(roomId, userId) {
     if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
 
     await redis.del(cacheKey(roomId));
+
+    // Clean up the unread counter - user is no longer a member
+    await clearUnread(userId, roomId);
 }
 
 export async function listMembers(roomId, {page, pageSize, skip}){

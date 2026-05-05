@@ -5,6 +5,7 @@ import {socketAuthenticate} from '../middleware/socketAuthenticate.js'
 import { registerMessageHandlers } from './messageHandlers.js';
 import { registerTypingHandlers } from './typingHandlers.js';
 import { markOnline, markOffline, joinPresence } from '../services/presenceService.js';
+import { getUnreadCounts } from '../services/unreadService.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient } from './adapter.js';
 import { logger } from '../utils/logger.js';
@@ -51,6 +52,13 @@ export function createSocketServer(httpServer){
                 socket.join(roomId);
                 await joinPresence(userId, roomId);
             } 
+
+            // Send unread counts to the connecting socket only (not the whole room)
+            // The client uses this to initialize badge state immediately on login
+            const counts = await getUnreadCounts(userId);
+
+            // `socket.emit` (not `io.to(...).emit`) — the unread counts are personal to the connecting user, not a broadcast.
+            socket.emit('unread:counts', counts);
         }catch (err) {
             logger.error({ err, userId }, 'Failed to auto-join rooms on connect');
         }
