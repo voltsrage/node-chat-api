@@ -28,4 +28,14 @@ const messageSchema = new mongoose.Schema(
 messageSchema.index({roomId: 1, createdAt: -1});
 messageSchema.index({senderId: 1})
 
+// Index for full-text search
+/*
+    MongoDB tokenizes the `content` string, applies a language-specific stemmer (default: English), and writes each stem to the inverted index. 
+    A query for `"running"` matches documents containing `"run"`, `"runs"`, or `"running"` because they share the same stem.
+
+    **MongoDB allows only one text index per collection.** If you need to search across multiple fields (e.g., `content` and `senderUsername`), 
+    combine them in a single compound text index:
+*/
+messageSchema.index({content: 'text'});
+
 export const Message = mongoose.model('Message', messageSchema);

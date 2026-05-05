@@ -1,6 +1,7 @@
 import { Message } from '../models/Message.js';
 import { Room } from '../models/Room.js';
 import { NotFoundError, ValidationError } from '../errors/AppError.js';
+import { paginatedResponse } from '../utils/paginate.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -149,6 +150,49 @@ export async function toggleReaction(messageId, userId, emoji){
 
     return toMessageResponse(afterRemove);
 
+}
+/*
+    **The `$meta: 'textScore'` pattern — why it appears twice:**
+
+    Text score is a computed value, not a stored field. MongoDB makes it available only within the same query via `{ $meta: 'textScore' }`. 
+    It must appear in both the projection (to include it in the returned document) and the sort (to sort by it). 
+    Omitting it from the projection but using it in sort, or vice versa, produces a query error.
+
+    **Why `countDocuments` with `$text` is acceptable:**
+
+    `countDocuments({ $text: { $search } })` uses the text index and returns quickly. It does not re-scan the collection.
+*/
+export async function searchMessages(roomId, query, {page, pageSize, skip}){
+    if(!query?.trim()){
+        throw new ValidationError('Search query is required.', 'MISSING_QUERY');
+    }
+
+    // Truncate to a reasonable length - text queries with thousands of words are
+    // not useful and generate unnecessarily large query plans
+    const sanitized = query.trim().slice(0,500);
+
+    const filter = {
+        roomId,
+        deletedAt: null, // never surface soft-deleted messages
+        $text: {$search: sanitized}
+    };
+
+    const [messages, total] = await Promise.all([
+        Message
+            .find(filter, {score : {$meta: 'textScore'}})
+            .sort({score: {$meta: 'textScore'}})   // most relevant first
+            .skip(skip)
+            .limit(pageSize)
+            .lean(),
+        Message.countDocuments(filter),
+    ]);
+
+    return paginatedResponse(
+        messages.map(toMessageResponse),
+        total,
+        page,
+        pageSize
+    )
 }
 
 function toMessageResponse(msg) {

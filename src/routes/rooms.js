@@ -109,6 +109,57 @@ roomsRouter.post('/:id/leave',requireMember, roomController.leaveRoom);
 
 /**
  * @openapi
+ * /rooms/{id}/messages/search:
+ *   get:
+ *     summary: Full-text search messages in a room
+ *     description: >
+ *       Searches non-deleted messages via Elasticsearch. Results are ranked by
+ *       relevance score with fuzzy matching (AUTO fuzziness). The query is
+ *       truncated to 500 characters. Soft-deleted messages are excluded.
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string } }
+ *       - name: q
+ *         in: query
+ *         required: true
+ *         description: Search query — supports fuzzy matching (max 500 characters)
+ *         schema: { type: string }
+ *       - { name: page,     in: query, schema: { type: integer, default: 1 } }
+ *       - { name: pageSize, in: query, schema: { type: integer, default: 20 } }
+ *     responses:
+ *       '200':
+ *         description: Paginated search results sorted by Elasticsearch relevance score
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 items:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:             { type: string }
+ *                       roomId:         { type: string }
+ *                       senderId:       { type: string }
+ *                       senderUsername: { type: string }
+ *                       content:        { type: string }
+ *                       highlight:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Matched excerpt with <em> tags around hit terms, or null
+ *                       createdAt:      { type: string, format: date-time }
+ *                 total:      { type: integer }
+ *                 page:       { type: integer }
+ *                 pageSize:   { type: integer }
+ *                 totalPages: { type: integer }
+ *       '400': { description: Missing or empty search query }
+ *       '403': { description: Not a member of this room }
+ */
+roomsRouter.get('/:id/messages/search', requireMember, messageController.searchMessages);
+
+/**
+ * @openapi
  * /rooms/{id}/members:
  *   get:
  *     summary: List room members (paginated)
