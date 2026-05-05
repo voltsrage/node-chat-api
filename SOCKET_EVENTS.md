@@ -55,6 +55,21 @@ Soft-delete a message. Content is replaced with `[deleted]`.
 
 ---
 
+### `message:react`
+
+Toggle a reaction on a message. Sending the same emoji twice removes the reaction.
+
+**Payload:**
+```json
+{ "messageId": "<string>", "emoji": "<string>" }
+```
+
+**Server response:** broadcasts `message:reaction` to the room on success.
+
+**Error codes:** `INVALID_EMOJI`, `MESSAGE_NOT_FOUND`, `INTERNAL_ERROR`
+
+---
+
 ### `typing:start`
 
 Notify the room that this user is typing. Sets a 3-second Redis TTL.
@@ -81,6 +96,19 @@ Notify the room that this user stopped typing. Does not delete the Redis key —
 
 ---
 
+### `read:mark`
+
+Notify the server that this user has read all messages in a room up to the current moment.
+
+**Payload:**
+```json
+{ "roomId": "<string>" }
+```
+
+**Server response:** broadcasts `read:update` to the whole room (including sender) on success. Silently ignored if the user is not a member.
+
+---
+
 ### `disconnect`
 
 Emitted by Socket.io when the client connection closes (tab close, network drop, explicit `socket.disconnect()`). No payload.
@@ -90,6 +118,19 @@ Emitted by Socket.io when the client connection closes (tab close, network drop,
 ---
 
 ## Server → Client
+
+### `unread:counts`
+
+Emitted automatically to the connecting socket immediately after authentication. Not broadcast to the room — personal to the connecting user.
+
+**Payload:**
+```json
+{ "<roomId>": "<number>" }
+```
+
+Only rooms with a count greater than zero are included. An empty object means no unread messages.
+
+---
 
 ### `message:new`
 
@@ -133,6 +174,36 @@ The client should replace the message content with `[deleted]` using `messageId`
 
 ---
 
+### `message:reaction`
+
+The reactions on a message were updated (emoji added or removed).
+
+**Payload:**
+```json
+{
+  "messageId": "<string>",
+  "roomId": "<string>",
+  "reactions": { "<emoji>": ["<userId>", "..."] }
+}
+```
+
+The client should replace the full reactions map for the given `messageId` rather than applying a diff.
+
+---
+
+### `read:update`
+
+A room member's read position was updated.
+
+**Payload:**
+```json
+{ "userId": "<string>", "roomId": "<string>", "readAt": "<ISO string>" }
+```
+
+Broadcast to the whole room including the sender. The client uses this to render "seen by" indicators.
+
+---
+
 ### `typing:update`
 
 A user in a room started or stopped typing.
@@ -163,8 +234,11 @@ An event handler encountered an error.
 | Code | Meaning |
 |---|---|
 | `INVALID_CONTENT` | Empty or whitespace-only message content |
+| `INVALID_EMOJI` | Missing or unsupported emoji in `message:react` |
 | `NOT_MEMBER` | Sender is not a member of the target room |
+| `MESSAGE_NOT_FOUND` | Target message does not exist |
 | `EDIT_NOT_ALLOWED` | Message not found, already deleted, or outside 15-minute edit window |
 | `DELETE_NOT_ALLOWED` | Message not found, already deleted, or not owned by sender |
+| `UNVERIFIED` | Account is not email-verified; message sending is gated |
 | `RATE_LIMITED` | Sender exceeded 30 messages per 60-second window |
 | `INTERNAL_ERROR` | Unexpected server error |

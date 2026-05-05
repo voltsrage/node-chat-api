@@ -1,4 +1,5 @@
 import * as roomService from '../services/roomService.js';
+import * as readReceiptService from '../services/readReceiptService.js';
 import { ValidationError } from '../errors/AppError.js';
 import {ApiResponse} from '../utils/ApiResponse.js';
 import { paginatedResponse, parsePaginationQuery } from '../utils/paginate.js';
@@ -57,4 +58,9 @@ export async function createInvite(req, res){
 export async function joinViaInvite(req, res){
     const room = await roomService.joinViaInvite(req.query.token, req.user.sub);
     res.json(ApiResponse.success(room));
+}
+
+export async function getRoomReceipts(req, res) {
+    const receipts = await readReceiptService.getRoomReceipts(req.params.id);
+    res.json(ApiResponse.success({receipts}));
 }

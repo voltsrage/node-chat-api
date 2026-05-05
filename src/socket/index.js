@@ -8,6 +8,7 @@ import { markOnline, markOffline, joinPresence } from '../services/presenceServi
 import { getUnreadCounts } from '../services/unreadService.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient } from './adapter.js';
+import { registerReadReceiptHandlers } from './readReceiptHandlers.js';
 import { logger } from '../utils/logger.js';
 
 // userId -> Set<socketId> - tracks active connections per user
@@ -66,6 +67,7 @@ export function createSocketServer(httpServer){
         // Register event handlers
         registerMessageHandlers(io, socket);
         registerTypingHandlers(io, socket);
+        registerReadReceiptHandlers(io, socket);
 
         socket.on('disconnect', async (reason) => {
             logger.info({ userId, socketId: socket.id, reason }, 'Socket disconnected');

@@ -5,6 +5,7 @@ import {NotFoundError, ValidationError} from '../errors/AppError.js'
 import { paginatedResponse } from '../utils/paginate.js';
 import { clearUnread } from './unreadService.js';
 import {randomBytes} from 'crypto';
+import { clearReceipt,clearAllReceipts } from './readReceiptService.js';
 
 const ROOM_CACHE_TTL = 5 * 60;
 const cacheKey = (id) => `room:${id}`;
@@ -86,6 +87,7 @@ export async function leaveRoom(roomId, userId) {
 
     // Clean up the unread counter - user is no longer a member
     await clearUnread(userId, roomId);
+    await clearReceipt(userId, roomId);
 }
 
 export async function listMembers(roomId, {page, pageSize, skip}){

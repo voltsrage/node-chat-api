@@ -18,7 +18,7 @@ export async function incrementUnread(roomId, senderId){
     // Pipeline all INCR calls in one Redis round-trip.
     // A room with 100 members would otherwise require 99 serial INCR commands.
     const pipeline = redis.pipeline();
-    for(const memberId of memberIds){
+    for(const memberId of others){
         pipeline.incr(key(memberId, roomId));
     }
 
