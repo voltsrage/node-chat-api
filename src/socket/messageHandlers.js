@@ -1,6 +1,7 @@
 import * as messageService from '../services/messageService.js';
 import * as unreadService from '../services/unreadService.js';
 import { checkMessageRateLimit } from './rateLimiter.js';
+import {logger} from '../utils/logger.js';
 
 const KNOWN_CODES = new Set([
     'NOT_MEMBER', 'EDIT_NOT_ALLOWED', 'DELETE_NOT_ALLOWED', 'INVALID_CONTENT', 'INVALID_EMOJI', 'MESSAGE_NOT_FOUND'

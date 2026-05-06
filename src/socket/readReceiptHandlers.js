@@ -12,7 +12,7 @@ export function registerReadReceiptHandlers(io, socket){
             //  but we still verify against the DB to prevent spoofed roomIds)
             const isMember = await Room.exists({
                 _id: roomId,
-                memberIds: socket.user.sub
+                'members.userId': socket.user.sub
             })
             
             if(!isMember) return; // silently ignore — no error emitted
@@ -24,7 +24,7 @@ export function registerReadReceiptHandlers(io, socket){
             io.to(roomId).emit('read:update', {
                 userId: socket.user.sub,
                 roomId,
-                readAt: new Date.toISOString()
+                readAt: new Date().toISOString()
             });
         }
         catch (err){

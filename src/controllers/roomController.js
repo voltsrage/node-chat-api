@@ -44,8 +44,7 @@ export async function leaveRoom(req, res){
 }
 
 export async function listMembers(req, res){
-    const pagination = parsePaginationQuery(req.query);
-    const result = await roomService.listMembers(req.params.id, pagination);
+    const result = await roomService.listMembers(req.params.id);
 
     res.json(ApiResponse.success(result));
 }
@@ -63,4 +62,33 @@ export async function joinViaInvite(req, res){
 export async function getRoomReceipts(req, res) {
     const receipts = await readReceiptService.getRoomReceipts(req.params.id);
     res.json(ApiResponse.success({receipts}));
+}
+
+export async function kickMember(req, res){
+    const room = await roomService.kickMember(
+        req.params.id,
+        req.user.sub,
+        req.params.userId
+    );
+
+    res.json(ApiResponse.success(room));
+}
+
+export async function setMemberRole(req, res){
+    const {role} = req.body;
+    if(!role) throw new ValidationError('role is required.');
+
+    const room = await roomService.setMemberRole(
+        req.params.id,
+        req.user.sub,
+        req.params.userId,
+        role
+    );
+
+    res.json(ApiResponse.success(room));
+}
+
+export async function deleteRoom(req,res){
+    await roomService.deleteRoom(req.params.id, req.user.sub);
+    res.status(204).send();
 }

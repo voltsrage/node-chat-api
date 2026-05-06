@@ -9,10 +9,10 @@ const key = (userId, roomId) => `unread:${userId}:${roomId}`;
 export async function incrementUnread(roomId, senderId){
     // Fetch all room members — must include offline users, not just connected sockets.
     // A user who is offline when the message arrives still needs an unread count.
-    const room = await Room.findById(roomId).select('memberIds').lean();
+    const room = await Room.findById(roomId).select('members').lean();
     if(!room) return;
 
-    const others = room.memberIds.filter(id => id.toString() !== senderId);
+    const others = room.members.filter(m => m.userId.toString() !== senderId).map(m => m.userId);
     if(!others.length) return;
 
     // Pipeline all INCR calls in one Redis round-trip.
@@ -31,7 +31,7 @@ export async function resetUnread(userId, roomId){
 
 export async function getUnreadCounts(userId){
     // Find all rooms this user belongs to
-    const rooms = await Room.find({memberIds: userId}).select('_id').lean();
+    const rooms = await Room.find({'members.userId': userId}).select('_id').lean();
     if(!rooms.length) return {};
 
     // Batch-read all unread counters in one pipeline round-trip

@@ -47,8 +47,8 @@ export function createSocketServer(httpServer){
         try{
             await markOnline(userId);
 
-            const rooms = await Room.find({memberIds: userId}).select('_id').lean();
-            for (const room in rooms){
+            const rooms = await Room.find({'members.userId': userId}).select('_id').lean();
+            for (const room of rooms){
                 const roomId = room._id.toString();
                 socket.join(roomId);
                 await joinPresence(userId, roomId);

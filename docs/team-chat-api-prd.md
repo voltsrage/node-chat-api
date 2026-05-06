@@ -393,7 +393,7 @@ Pino is used over Winston because it is significantly faster (lower overhead per
 | 20 | Direct messages | Find-or-create pattern, idempotent DM room creation |
 | 21 | Room roles / RBAC | Multi-role membership schema, permission middleware, migration |
 | 22 | Full-text message search | MongoDB text index, `$text` operator, relevance scoring |
-| 23 | Read receipts | Redis STRING per user per room, updated on history fetch |
+| 23 | Read receipts | Redis `lastread:{userId}:{roomId}` (ISO time), `GET …/receipts`, socket `read:mark` / `read:update` |
 | 24 | Prometheus metrics | `prom-client`, four golden signals, Grafana scrape config |
 
 ---
@@ -703,14 +703,17 @@ MongoDB's built-in text search is sufficient for many use cases and requires no 
 
 ### Phase 23 — Read Receipts
 
-**What to do:**
-1. When a user fetches message history, record their read position: `SET lastread:{userId}:{roomId} {newestMessageTimestamp}`.
-2. Build `GET /api/v1/rooms/:id/receipts`: for each member, return `{ userId, lastReadAt }` by pipelining `GET lastread:{userId}:{roomId}` for all members.
-3. Add a `read:update` Socket.io event so clients can report their read position in real time without making an HTTP request.
-4. Emit a `read:receipt` broadcast to the room when a user's read position updates, so other clients can render the "seen by" indicator immediately.
+**What to do (aligned with the current codebase):**
+1. **Redis value:** On each mark-read, `SET lastread:{userId}:{roomId} <ISO-8601 string>`. The stored value is the **server wall-clock time when the room was marked read** (`markRead` uses `new Date().toISOString()`), not the `createdAt` of the newest message in the history response. That timestamp still means “this user had caught up at least through this moment,” which is enough for a simple “seen / last active in thread” indicator.
+2. **When read state is written:**  
+   - **`GET /api/v1/rooms/:id/messages`** — after message history is loaded, the handler fire-and-forgets `markRead(userId, roomId)` (same pattern as unread reset: must not block the JSON response). When `markRead` completes, if `app.get('io')` is set, the server emits **`read:update`** to the Socket.io room so other tabs or members see the update.  
+   - **Socket.io `read:mark`** — payload `{ roomId }`. Server verifies membership with `Room.exists`, then `markRead`, then **`io.to(roomId).emit('read:update', { userId, roomId, readAt })`**. Non-members are ignored with no error event (silent no-op).
+3. **`GET /api/v1/rooms/:id/receipts`** — behind `requireMember`. Loads room members from MongoDB, runs a **Redis pipeline** of `GET lastread:{memberUserId}:{roomId}` for each member, and returns **`{ receipts: { [userId]: <ISO string> } }`** in the standard `ApiResponse` envelope. Users with no Redis key yet are **omitted** from the map (sparse object, not an array of `{ userId, lastReadAt }`).
+4. **Event names (do not confuse):** Clients **send** **`read:mark`**; the server **broadcasts** **`read:update`** (there is no `read:receipt` event in this codebase). Payload: `{ userId, roomId, readAt }`.
+5. **Cleanup:** `clearReceipt(userId, roomId)` runs when a user **leaves** a room (and on the “last member / owner left” delete path inside `leaveRoom`). A dedicated `clearAllReceipts(roomId, members)` helper exists for bulk key deletion; wire it from **`deleteRoom`** (and any other full-room teardown) if you need zero orphaned `lastread:*` keys after owner-initiated room delete.
 
 **Why:**
-Read receipts combine REST (initial load) and WebSocket (real-time updates) in the same feature, which is a good exercise in knowing when to use each. The Redis STRING is the right data structure: one key per user per room, overwritten on each read. Storing this in MongoDB would generate a write on every page scroll — Redis absorbs that write load without durability overhead.
+Read receipts combine REST (initial load, history fetch) and WebSocket (explicit `read:mark` without waiting for HTTP) in the same feature, which is a good exercise in knowing when to use each. The Redis STRING is the right data structure: one key per user per room, overwritten on each read. Storing this in MongoDB would generate a write on every history view — Redis absorbs that write load without durability overhead.
 
 ---
 

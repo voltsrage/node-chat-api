@@ -38,7 +38,7 @@ export async function getMessageHistory(roomId, { before, limit } = {}) {
 }
 
 export async function createMessage(roomId, { senderId, senderUsername, content }) {
-    const isMember = await Room.exists({ _id: roomId, memberIds: senderId });
+    const isMember = await Room.exists({ _id: roomId, 'members.userId': senderId });
     if (!isMember) {
         const err = new Error('NOT_MEMBER');
         err.code = 'NOT_MEMBER';

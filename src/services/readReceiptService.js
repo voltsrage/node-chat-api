@@ -12,23 +12,23 @@ export async function markRead(userId, roomId){
 }
 
 export async function getRoomReceipts(roomId){
-    const room = await Room.findById(roomId).select('memberIds').lean();
+    const room = await Room.findById(roomId).select('members').lean();
     if(!room) return {};
 
     // One pipeline round-trip for all members - same pattern as getUnreadCounts
     const pipeline = redis.pipeline();
 
-    for(const memberId of room.memberIds){
-        pipeline.get(key(memberId.toString(), roomId));
+    for(const m of room.members){
+        pipeline.get(key(m.userId.toString(), roomId));
     }
 
     const results = await pipeline.exec();
 
     const receipts = {};
-    for(let i = 0; i < room.memberIds.length; i++){
+    for(let i = 0; i < room.members.length; i++){
         const ts = results[i][1];
         // Only include members who have read at least once — omit null entries
-        if(ts) receipts[room.memberIds[i].toString()] = ts;
+        if(ts) receipts[room.members[i].userId.toString()] = ts;
     }
 
     return receipts;
@@ -44,7 +44,7 @@ export async function clearAllReceipts(roomId, members){
     if(!members?.length) return;
     const pipeline =redis.pipeline();
     for(const m of members){
-        pipeline.del(key(m.toString(), roomId));
+        pipeline.del(key(m.userId.toString(), roomId));
     }
 
     await pipeline.exec();

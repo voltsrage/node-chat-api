@@ -12,7 +12,14 @@ export async function requireMember(req, _res, next){
     const privateNonMember = await Room.exists({
         _id: req.params.id,
         isPrivate: true,
-        membersIds: {$ne: req.user.sub}
+        /*
+            **Why `$not: $elemMatch` and not `'members.userId': { $ne: userId }`:**
+
+            `{ 'members.userId': { $ne: userId } }` matches documents where *at least one* member has a different userId — 
+            it returns true even when the user IS a member (as long as anyone else is also a member). 
+            `$not: { $elemMatch: { userId } }` correctly means "no member sub-document has this userId".
+         */
+        members: {$not: {$elemMatch: {userId: req.user.sub}}}
     });
 
     /*

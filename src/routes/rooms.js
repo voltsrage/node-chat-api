@@ -5,6 +5,7 @@ import * as messageController from '../controllers/messageController.js';
 import * as presenceController from '../controllers/presenceController.js';
 import {requireVerified} from '../middleware/requireVerified.js'
 import { requireMember } from "../middleware/requireMember.js";
+import {requireRoomRole} from '../middleware/requireRoomRole.js'
 
 export const roomsRouter = Router();
 roomsRouter.use(authenticate);
@@ -230,4 +231,83 @@ roomsRouter.get('/:id/presence',requireMember, presenceController.getRoomPresenc
  */
 roomsRouter.post('/:id/invite', requireMember, requireVerified, roomController.createInvite);
 
+/**
+ * @openapi
+ * /rooms/{id}/receipts:
+ *   get:
+ *     summary: Get read receipts for a room
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string } }
+ *     responses:
+ *       '200':
+ *         description: Read receipts for all members
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 receipts: { type: array }
+ *       '403': { description: Not a member of this room }
+ */
 roomsRouter.get('/:id/receipts', requireMember, roomController.getRoomReceipts);
+
+/**
+ * @openapi
+ * /rooms/{id}:
+ *   delete:
+ *     summary: Delete a room
+ *     description: Permanently deletes the room. Requires the caller to be the room owner.
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: string } }
+ *     responses:
+ *       '204': { description: Room deleted }
+ *       '403': { description: Not a member or insufficient role (owner required) }
+ *       '404': { description: Room not found }
+ */
+roomsRouter.delete('/:id', requireMember, requireRoomRole('owner'), roomController.deleteRoom);
+
+/**
+ * @openapi
+ * /rooms/{id}/members/{userId}:
+ *   delete:
+ *     summary: Kick a member from the room
+ *     description: Removes the specified user from the room. Requires admin role or higher.
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id,     in: path, required: true, schema: { type: string } }
+ *       - { name: userId, in: path, required: true, schema: { type: string } }
+ *     responses:
+ *       '200': { description: Member removed, updated room returned }
+ *       '403': { description: Not a member or insufficient role (admin required) }
+ *       '404': { description: Room or user not found }
+ */
+roomsRouter.delete('/:id/members/:userId', requireMember, requireRoomRole('admin'), roomController.kickMember);
+
+/**
+ * @openapi
+ * /rooms/{id}/members/{userId}/role:
+ *   put:
+ *     summary: Set a member's role
+ *     description: Updates the role of a room member. Requires admin role or higher.
+ *     tags: [Rooms]
+ *     parameters:
+ *       - { name: id,     in: path, required: true, schema: { type: string } }
+ *       - { name: userId, in: path, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [role]
+ *             properties:
+ *               role: { type: string, example: admin }
+ *     responses:
+ *       '200': { description: Role updated, updated room returned }
+ *       '400': { description: role is required }
+ *       '403': { description: Not a member or insufficient role (admin required) }
+ *       '404': { description: Room or user not found }
+ */
+roomsRouter.put('/:id/members/:userId/role', requireMember, requireRoomRole('admin'), roomController.setMemberRole);

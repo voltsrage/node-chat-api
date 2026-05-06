@@ -1,7 +1,7 @@
-import {Room} from '../models/Room.js';
+import {ROLE_RANK, Room} from '../models/Room.js';
 import {User} from '../models/User.js';
 import {redis} from '../db/redis.js';
-import {NotFoundError, ValidationError} from '../errors/AppError.js'
+import {NotFoundError, ValidationError, ForbiddenError} from '../errors/AppError.js'
 import { paginatedResponse } from '../utils/paginate.js';
 import { clearUnread } from './unreadService.js';
 import {randomBytes} from 'crypto';
@@ -17,7 +17,7 @@ export async function createRoom(userId, {name, description, isPrivate}){
         description : description ?? null,
         isPrivate: isPrivate ?? false,
         createdBy: userId,
-        memberIds: [userId]
+        members: [{userId, role: 'owner'}] // creator is always owner
     });
 
     return toRoomResponse(room);
@@ -33,7 +33,7 @@ export async function listRooms({page, pageSize, skip}, userId){
     const filter = {
         $or: [
             {isPrivate: {$ne: true}},
-            {isPrivate: true, memberIds: userId}
+            {isPrivate: true, 'members.userId': userId}
         ]
     }
     const [rooms, total] = await Promise.all([
@@ -59,14 +59,25 @@ export async function getRoomById(roomId){
 }
 
 export async function joinRoom(roomId, userId) {
-    // $addToSet is idempotent - joining a room you are already in is a silent no-op
-    const room = await Room.findByIdAndUpdate(
-        roomId,
-        {$addToSet: {memberIds: userId}},
+    // $not: $elemMatch guards against double-join
+    const room = await Room.findOneAndUpdate(
+        {
+            _id: roomId,
+            isPrivate: false,
+            members: {$not: {$elemMatch: {userId}}}
+        },
+        {$push: {members: {userId, role: 'member'}}},
         {new: true}
     );
 
-    if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+    if (!room) {
+        const exists = await Room.findById(roomId).lean();
+        if(!exists) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+        if(exists.isPrivate) throw new ForbiddenError('Room is private.', 'NOT_MEMBER');
+
+        // Already a member - idempotent
+        return toRoomResponse(exists);
+    }
 
     // Invalidate immediately - stale member count in the cache would be misleading
     await redis.del(cacheKey(roomId));
@@ -75,33 +86,53 @@ export async function joinRoom(roomId, userId) {
 }
 
 export async function leaveRoom(roomId, userId) {
-    // $pull is idempotent - leaving a room you are not in is a silent no-op
-    const room = await Room.findByIdAndUpdate(
-        roomId,
-        {$pull: {memberIds: userId}},
-        {new: true}
-    );
-    if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+    const room = await Room.findById(roomId);
+    if(!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
 
+    const member = room.members.find(m => m.userId.toString() === userId);
+    if(!member) throw new ForbiddenError('You are not a member.', 'NOT_MEMBER');
+
+    if(member.role === 'owner'){
+        // Must transfer ownership before leaving - pick oldest admin, then oldest member
+        const heir =
+            room.members.find(m => m.role === 'admin' && m.userId.toString() !== userId) ??
+            room.members.find(m => m.userId.toString() !== userId);
+
+        if(heir){
+            heir.role = 'owner';
+        } else {
+            // Owner is the last member - delete the room entirely
+            await Room.deleteOne({_id: roomId});
+            await redis.del(cacheKey(roomId));
+            await clearUnread(userId, roomId);
+            await clearReceipt(userId, roomId);
+            return null
+        }
+    }
+
+    room.members = room.members.filter(m => m.userId.toString() !== userId);
+    await room.save();
     await redis.del(cacheKey(roomId));
-
-    // Clean up the unread counter - user is no longer a member
     await clearUnread(userId, roomId);
     await clearReceipt(userId, roomId);
+
+    return toRoomResponse(room.toObject());
 }
 
-export async function listMembers(roomId, {page, pageSize, skip}){
-    const room = await Room.findById(roomId).select('memberIds').lean();
-    if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
-
-    const total = room.memberIds.length;
-    const pageOfIds = room.memberIds.slice(skip, skip + pageSize);
-
-    const members = await User.find({_id: {$in: pageOfIds}})
-        .select('username displayName avatarUrl createdAt')
+export async function listMembers(roomId){
+    const room = await Room.findById(roomId).select('members')
+        .populate('members.userId', 'username email')
         .lean();
 
-    return paginatedResponse(members, total, page, pageSize);
+    if(!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+
+    return room.members.map(m => ({
+        userId: m.userId._id,
+        username: m.userId.username,
+        role: m.role,
+        joinedAt: m.joinedAt
+    }))
+    
 }
 
 /*
@@ -113,7 +144,7 @@ export async function listMembers(roomId, {page, pageSize, skip}){
 */
 export async function createInvite(roomId, userId){
     // Verify room exists and caller is a member - only members can invite others
-    const isMember = await Room.exists({_id: roomId, memberIds: userId});
+    const isMember = await Room.exists({_id: roomId, 'members.userId': userId});
     if(!isMember){
         // Don't distinguish "room not found" from "not a member" —
         // both return 403 to avoid leaking whether a private room exists
@@ -149,18 +180,96 @@ export async function joinViaInvite(token, userId){
 
     const {roomId} = JSON.parse(raw);
 
-    const room = await Room.findByIdAndUpdate(
-        roomId,
-        {$addToSet: {memberIds: userId}},
+    const room = await Room.findOneAndUpdate(
+        {_id: roomId, members: {$not : {$elemMatch: {userId}}}},
+        {$push: {members: {userId, role:'member'}}},
         {new: true}
     );
 
-    if(!room) throw new NotFoundError('Room no longer exists.', 'ROOM_NOT_FOUND');
+    if(!room) 
+    {
+        const exists = await Room.findById(roomId).lean();
+        if(!exists) throw new NotFoundError('Room no longer exists.', 'ROOM_NOT_FOUND');
+        return toRoomResponse(exists); // already a member - idempotent
+    }
 
     // Invalidate the room cache - member count changed
     await redis.del(cacheKey(roomId));
 
     return toRoomResponse(room);
+}
+
+export async function kickMember(roomId, actorId, targetId){
+    const room = await Room.findById(roomId);
+    if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+    
+    const actor = room.members.find(m => m.userId.toString() === actorId);
+    const target = room.members.find(m => m.userId.toString() === targetId);
+
+    if(!actor) throw new ForbiddenError('You are not a member.', 'NOT_MEMBER');
+    if(!target)  throw new NotFoundError('Target user is not a member.', 'TARGET_NOT_MEMBER');
+
+    // Owners cannot be kicked - the must transfer ownership first
+    if(target.role === 'owner'){
+        throw new ForbiddenError('Cannot kick the room owner.', 'KICK_OWNER');
+    };
+
+    // Admins can kick members but not other admins
+    if(actor.role === 'admin' && ROLE_RANK[target.role] >= ROLE_RANK['admin']){
+        throw new ForbiddenError('Admins cannot kick other admins.', 'INSUFFICIENT_ROLE');
+    };
+
+    room.members = room.members.filter(m => m.userId.toString() !== targetId);
+    await room.save();
+    await clearUnread(targetId, roomId);
+    await redis.del(cacheKey(roomId));
+
+    return toRoomResponse(room.toObject());
+}
+
+export async function setMemberRole(roomId, actorId, targetId, newRole){
+    if(!['admin', 'member'].includes(newRole))
+        throw new ValidationError('Role must be "admin" or "member".', 'INVALID_ROLE');
+
+    const room = await Room.findById(roomId);
+    if (!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+    
+    const actor = room.members.find(m => m.userId.toString() === actorId);
+    const target = room.members.find(m => m.userId.toString() === targetId);
+
+    if(!actor) throw new ForbiddenError('You are not a member.', 'NOT_MEMBER');
+    if(!target)  throw new NotFoundError('Target user is not a member.', 'TARGET_NOT_MEMBER');
+
+    // Owner's role can only be changed via explicit transferOwnership - not here
+    if(target.role == 'owner'){
+        throw new ForbiddenError("Cannot change the owner's role.", 'CHANGE_OWNER_ROLE');
+    }
+
+    // Admins can demote to member but cannot promote anyone to admin
+    if(actor.role === 'admin' && newRole === 'admin')
+        throw new ForbiddenError('Admins cannot promote to admin.', 'INSUFFICIENT_ROLE');
+
+    target.role = newRole;
+    await room.save();
+
+    return toRoomResponse(room.toObject());
+}
+
+export async function deleteRoom(roomId, userId){
+    const room = await Room.findById(roomId);
+    if(!room) throw new NotFoundError('Room not found.', 'ROOM_NOT_FOUND');
+
+    const member = room.members.find(m => m.userId.toString() === userId);
+    if(!member || member.role !== 'owner')
+        throw new ForbiddenError('Only the room owner can delete the room.', 'INSUFFICIENT_ROLE');
+
+    await Room.deleteOne({_id: roomId});
+    await redis.del(cacheKey(roomId));
+
+    // Clean up unread counters for all members
+    for(const m of room.members) {
+        await clearUnread(m.userId.toString(), roomId);
+    }
 }
 
 function toRoomResponse(room){
@@ -169,7 +278,7 @@ function toRoomResponse(room){
         name: room.name,
         description: room.description,
         createdBy: room.createdBy,
-        memberCount: room.memberIds.length,
+        memberCount: room.members.length,
         isPrivate: room.isPrivate ?? false,
         createdAt: room.createdAt
     }
