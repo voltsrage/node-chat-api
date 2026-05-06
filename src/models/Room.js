@@ -30,13 +30,21 @@ const memberSchema = new mongoose.Schema({
 
 const roomSchema = new mongoose.Schema(
     {
-        name: {type: String, required: true, unique: true, trim: true},
+        name: {type: String, required: true, unique: true, trim: true, sparse: true},
         description: {type: String, default: null},
         createdBy: {type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true},
         // Indexes are declared here to be explicit — never rely on Mongoose to infer
         // the right index from `unique: true` alone without verification.
         members : [memberSchema],
-        isPrivate: {type: Boolean, default: false}
+        isPrivate: {type: Boolean, default: false},
+        type: {type: String, enum: ['group', 'dm'], default: 'group'},
+        /*
+        **Why `sparse: true` on both `name` and `dmKey`:**
+
+        A non-sparse unique index treats `null` as a value. Two group rooms with `dmKey: undefined` would both be indexed as `null` — the second create would throw a duplicate key error. `sparse: true` tells MongoDB to skip documents where the field is absent or `null`, so only defined values participate in the uniqueness check.
+
+        */
+        dmKey: {type:String, unique: true, sparse: true}
     },
     {timestamps: {createdAt: true, updatedAt: true}}
 );

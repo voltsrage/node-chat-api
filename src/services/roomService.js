@@ -31,6 +31,7 @@ export async function listRooms({page, pageSize, skip}, userId){
     // Private rooms: visible only to members
 
     const filter = {
+        type: {$ne: 'dm'}, // DM rooms are a separate resource, not part of the group list
         $or: [
             {isPrivate: {$ne: true}},
             {isPrivate: true, 'members.userId': userId}
@@ -270,6 +271,8 @@ export async function deleteRoom(roomId, userId){
     for(const m of room.members) {
         await clearUnread(m.userId.toString(), roomId);
     }
+
+    await clearAllReceipts(roomId, room.members);
 }
 
 function toRoomResponse(room){
@@ -280,6 +283,7 @@ function toRoomResponse(room){
         createdBy: room.createdBy,
         memberCount: room.members.length,
         isPrivate: room.isPrivate ?? false,
+        type: room.type ?? 'group',
         createdAt: room.createdAt
     }
 }
