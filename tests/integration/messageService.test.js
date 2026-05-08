@@ -31,7 +31,12 @@ const ROOM_ID   = new mongoose.Types.ObjectId().toString();
 const SENDER_ID = new mongoose.Types.ObjectId().toString();
 
 async function seedRoom() {
-  await Room.create({ _id: ROOM_ID, name: 'test', memberIds: [SENDER_ID], createdBy: SENDER_ID });
+  await Room.create({
+    _id: ROOM_ID,
+    name: 'test',
+    createdBy: SENDER_ID,
+    members: [{ userId: SENDER_ID, role: 'owner' }],
+  });
 }
 
 describe('getMessageHistory — cursor pagination', () => {

@@ -28,10 +28,11 @@ describe('createRateLimiter', () => {
     const limiter = createRateLimiter({ windowSec: 60, max: 10, keyPrefix: 'test' });
 
     await expect(limiter({ ip: '127.0.0.1' }, {}, next))
-      .rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+      .rejects.toMatchObject({ code: 'RATE_LIMITED' });
   });
 
   it('keys on req.ip — two IPs have separate counters', async () => {
+    mockEval.mockClear(); // isolate from previous test calls
     mockEval.mockResolvedValue(1);
 
     const limiter = createRateLimiter({ windowSec: 60, max: 10, keyPrefix: 'test' });

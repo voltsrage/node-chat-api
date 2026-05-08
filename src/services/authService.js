@@ -109,9 +109,7 @@ export async function login({ email, password }) {
 
     if (!user) {
         // No user found - still throw INVALID_CREDENTIALS, not USER_NOT_FOUND
-        const err = new Error('INVALID_CREDENTIALS');
-        err.code = 'INVALID_CREDENTIALS';
-        throw err;
+        throw new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
     }
 
     // Check lockout BEFORE verifying the password
@@ -142,18 +140,14 @@ export async function login({ email, password }) {
             );
         }
 
-        const remaining = LOCKOUT_THRESHOLD - attempts;
-        const err       = new Error('INVALID_CREDENTIALS');
-        err.code        = 'INVALID_CREDENTIALS';
-        err.remaining   = remaining; // optional: include in response for UX
-        throw err;
+        throw new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
     }
 
     // Successful login — reset the attempt counter
     // The lock key (if it somehow exists) will expire naturally
     await redis.del(`login-attempts:${user._id}`);
 
-    const accessToken = signAccessToken(user._id.toString(), user.username);
+    const accessToken = signAccessToken(user);
     const refreshToken = await issueRefreshToken(user._id.toString());
 
     return { accessToken, refreshToken };
@@ -169,7 +163,7 @@ export async function refresh(token) {
     const user = await User.findById(result.userId);
     if (!user) throw new UnauthorizedError('User not found.');
 
-    const accessToken = signAccessToken(user._id.toString(), user.username);
+    const accessToken = signAccessToken(user);
     const refreshToken = await issueRefreshToken(user._id.toString());
 
     return { accessToken, refreshToken };
